@@ -1,13 +1,4 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: kiosk-ollama
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - kiosk-net
-
   chroma:
     image: chromadb/chroma:0.5.23
     container_name: kiosk-chroma
@@ -27,9 +18,8 @@ services:
       - .env
     environment:
       KNOWLEDGE_DIR: /workspace/knowledge
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
     depends_on:
-      ollama:
-        condition: service_started
       chroma:
         condition: service_started
     volumes:
@@ -46,21 +36,7 @@ services:
     networks:
       - kiosk-net
 
-  init-model:
-    image: ollama/ollama:latest
-    container_name: kiosk-init-model
-    depends_on:
-      ollama:
-        condition: service_started
-    entrypoint: ["/bin/sh", "-c", "sleep 5; ollama pull qwen2.5:3b; ollama pull nomic-embed-text"]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    networks:
-      - kiosk-net
-    restart: "no"
-
 volumes:
-  ollama_data:
   vector_data:
 
 networks:

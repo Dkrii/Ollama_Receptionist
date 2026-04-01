@@ -2,7 +2,7 @@ const chatBox = document.getElementById('chatBox');
 const input = document.getElementById('messageInput');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
-const citationsEl = document.getElementById('citations');
+const debugStatsEl = document.getElementById('debugStats');
 
 let isSending = false;
 let speechQueue = [];
@@ -136,21 +136,27 @@ async function renderBotMessageWordByWord(message) {
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-function renderCitations(citations) {
-  citationsEl.innerHTML = '';
-  if (!citations || !citations.length) {
+function renderDebugStats(stats = null) {
+  debugStatsEl.innerHTML = '';
+  
+  if (!stats) {
     const li = document.createElement('li');
-    li.textContent = 'Tidak ada sumber relevan.';
-    citationsEl.appendChild(li);
+    li.textContent = 'Menunggu metrik AI...';
+    debugStatsEl.appendChild(li);
     return;
   }
 
-  citations.forEach((item) => {
+  const items = [
+    `Waktu Mulai (TTFT): ${(stats.ttft / 1000).toFixed(2)} detik`,
+    `Total Waktu: ${(stats.totalTime / 1000).toFixed(2)} detik`,
+    `Hitungan Karakter: ${stats.charCount}`,
+    `Kecepatan: ${stats.charsPerSec} char/detik`
+  ];
+
+  items.forEach(text => {
     const li = document.createElement('li');
-    const source = item?.metadata?.source || 'unknown';
-    const score = item?.score ?? 0;
-    li.textContent = `${source} (score: ${score})`;
-    citationsEl.appendChild(li);
+    li.textContent = text;
+    debugStatsEl.appendChild(li);
   });
 }
 
@@ -172,7 +178,7 @@ async function sendMessageNonStream(message, thinkingNode = null) {
   }
   chatBox.scrollTop = chatBox.scrollHeight;
   speakText(answer);
-  renderCitations(data.citations || []);
+  renderDebugStats(null);
 }
 
 async function sendMessage() {
@@ -190,6 +196,10 @@ async function sendMessage() {
   let botBubble = null;
   let finalAnswer = '';
   let streamEventError = '';
+
+  const startTime = performance.now();
+  let firstTokenTime = null;
+  renderDebugStats(null);
 
   try {
     const response = await fetch('/api/chat/stream', {
@@ -234,13 +244,25 @@ async function sendMessage() {
           if (finalAnswer.trim()) {
             if (!botBubble) {
               botBubble = addBotBubble();
+              firstTokenTime = performance.now();
+              const ttft = firstTokenTime - startTime;
+              renderDebugStats({
+                ttft: ttft,
+                totalTime: ttft,
+                charCount: finalAnswer.length,
+                charsPerSec: (ttft > 0 ? (finalAnswer.length / (ttft / 1000)).toFixed(1) : 0)
+              });
+
+              if (thinkingNode.isConnected) {
+                thinkingNode.remove();
+              }
             }
             botBubble.textContent = finalAnswer;
             chatBox.scrollTop = chatBox.scrollHeight;
             enqueueSpeechChunk(token);
           }
         } else if (event.type === 'citations') {
-          renderCitations(event.value || []);
+          console.debug('Sumber RAG:', event.value || []);
         } else if (event.type === 'error') {
           streamEventError = event.value || 'Gagal mendapatkan jawaban';
         }
@@ -251,11 +273,21 @@ async function sendMessage() {
       try {
         const event = JSON.parse(buffer.trim());
         if (event.type === 'citations') {
-          renderCitations(event.value || []);
+          console.debug('Sumber RAG:', event.value || []);
         }
       } catch (parseError) {
       }
     }
+
+    const endTime = performance.now();
+    const totalTime = endTime - startTime;
+    const ttft = firstTokenTime ? (firstTokenTime - startTime) : totalTime;
+    renderDebugStats({
+      ttft: ttft,
+      totalTime: totalTime,
+      charCount: finalAnswer.length,
+      charsPerSec: totalTime > 0 ? (finalAnswer.length / (totalTime / 1000)).toFixed(1) : 0
+    });
 
     if (!finalAnswer.trim()) {
       finalAnswer = streamEventError || 'Terjadi kesalahan saat memproses pertanyaan.';

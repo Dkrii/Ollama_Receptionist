@@ -30,7 +30,7 @@ body {
 }
 
 .vr-layout {
-  min-height: 100vh;
+  min-height: 80vh;
   display: grid;
   place-items: center;
   padding: 28px;
@@ -149,6 +149,32 @@ body {
   gap: 8px;
   color: rgba(239, 252, 255, 0.9);
   font-size: 14px;
+}
+
+.vr-showcase__debug {
+  margin-top: 36px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.25);
+  padding-top: 18px;
+  position: relative;
+  z-index: 1;
+}
+
+.vr-showcase__debug-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 700;
+}
+
+.vr-showcase__debug-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #a4e5ed;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: monospace;
 }
 
 .vr-chatboard {
@@ -385,23 +411,7 @@ body {
   transform: translateY(-2px) scale(1.02);
 }
 
-.vr-sources {
-  margin-top: 16px;
-  border-top: 1px solid var(--vr-line);
-  padding-top: 14px;
-}
 
-.vr-sources__title {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
-
-.vr-sources__list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--vr-text-muted);
-  line-height: 1.5;
-}
 
 .vr-shell--admin {
   grid-template-columns: minmax(280px, 0.8fr) minmax(700px, 1.6fr);
