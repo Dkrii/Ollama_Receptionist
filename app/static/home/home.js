@@ -138,7 +138,7 @@ async function renderBotMessageWordByWord(message) {
 
 function renderDebugStats(stats = null) {
   debugStatsEl.innerHTML = '';
-  
+
   if (!stats) {
     const li = document.createElement('li');
     li.textContent = 'Menunggu metrik AI...';

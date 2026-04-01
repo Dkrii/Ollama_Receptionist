@@ -30,7 +30,7 @@ body {
 }
 
 .vr-layout {
-  min-height: 80vh;
+  min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 28px;

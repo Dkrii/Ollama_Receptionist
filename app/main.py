@@ -3,9 +3,9 @@ import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api.routes.admin import router as admin_router
-from api.routes.chat import router as chat_router
-from api.routes.web import router as web_router
+from api.admin.routes import router as admin_router
+from api.chat.routes import router as chat_router
+from api.web.routes import router as web_router
 
 
 logging.basicConfig(level=logging.INFO)

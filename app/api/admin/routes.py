@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from services.admin_service import AdminService
+from api.admin.service import AdminAppService
 
 
 router = APIRouter(prefix="/api", tags=["admin"])
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api", tags=["admin"])
 @router.post("/reindex")
 def reindex():
     try:
-        result = AdminService.reindex()
+        result = AdminAppService.reindex()
         return JSONResponse(result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -19,7 +19,7 @@ def reindex():
 @router.post("/admin/upload-documents")
 def upload_documents(files: list[UploadFile] = File(...)):
     try:
-        return JSONResponse(AdminService.save_uploaded_documents(files))
+        return JSONResponse(AdminAppService.upload_documents(files))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -27,6 +27,6 @@ def upload_documents(files: list[UploadFile] = File(...)):
 @router.get("/admin/status")
 def monitoring_status():
     try:
-        return JSONResponse(AdminService.get_monitoring_status())
+        return JSONResponse(AdminAppService.monitoring_status())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
