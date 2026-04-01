@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Panel - Virtual Receptionist</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260331-4" />
+</head>
+<body class="vr-admin-page">
+  <main class="vr-layout">
+    <section class="vr-shell vr-shell--admin" aria-label="Admin panel">
+      <aside class="vr-showcase vr-admin-showcase" aria-label="Admin menu">
+        <p class="vr-showcase__eyebrow">Admin Console</p>
+        <h1 class="vr-showcase__title">Panel Admin</h1>
+        <p class="vr-showcase__subtitle">Kelola knowledge, kontak karyawan, dan monitoring service dalam satu halaman.</p>
+
+        <div class="vr-admin-showcase__stats" aria-hidden="true">
+          <div class="vr-admin-showcase__stat">
+            <span>Knowledge</span>
+            <strong>Upload</strong>
+          </div>
+          <div class="vr-admin-showcase__stat">
+            <span>Karyawan</span>
+            <strong>Kontak</strong>
+          </div>
+          <div class="vr-admin-showcase__stat">
+            <span>Service</span>
+            <strong>Monitoring</strong>
+          </div>
+        </div>
+
+        <ul class="vr-showcase__highlights">
+          <li>Upload dokumen knowledge</li>
+          <li>Update kontak karyawan</li>
+          <li>Reindex & cek status service</li>
+        </ul>
+
+        <a href="/" class="vr-button vr-button--secondary vr-admin-back">Kembali ke Chat</a>
+      </aside>
+
+      <section class="vr-chatboard vr-adminboard" aria-label="Workspace admin">
+        <header class="vr-chatboard__header vr-adminboard__header">
+          <div>
+            <p class="vr-chatboard__eyebrow">Virtual Receptionist</p>
+            <h2 class="vr-chatboard__title">Admin Panel</h2>
+            <p class="vr-adminboard__subtitle">Kontrol cepat untuk konten knowledge, data kontak, dan status layanan.</p>
+          </div>
+          <span id="adminPageStatus" class="vr-chip">Ready</span>
+        </header>
+
+        <section class="vr-admin-grid">
+          <article class="vr-admin-card">
+            <h3 class="vr-admin-card__title">Upload Dokumen</h3>
+            <p class="vr-admin-card__desc">Format yang didukung: .txt, .md, .pdf, .docx</p>
+            <input id="docFiles" type="file" multiple accept=".txt,.md,.pdf,.docx" class="vr-composer__input vr-file-input" />
+            <div class="vr-admin-actions">
+              <button id="uploadBtn" class="vr-button vr-button--primary" type="button">Upload Dokumen</button>
+            </div>
+            <p id="uploadResult" class="vr-admin-note"></p>
+          </article>
+
+          <article class="vr-admin-card">
+            <h3 class="vr-admin-card__title">Operasional</h3>
+            <p class="vr-admin-card__desc">Jalankan sinkronisasi knowledge dan pembaruan status service.</p>
+            <div class="vr-admin-actions">
+              <button id="reindexBtn" class="vr-button vr-button--primary" type="button">Reindex Knowledge</button>
+              <button id="refreshStatusBtn" class="vr-button vr-button--secondary" type="button">Refresh Monitoring</button>
+            </div>
+            <p id="reindexResult" class="vr-admin-note"></p>
+          </article>
+
+          <article class="vr-admin-card">
+            <h3 class="vr-admin-card__title">Monitoring Service</h3>
+            <p class="vr-admin-card__desc">Pantau status layanan utama dengan label Active atau Warning.</p>
+            <div id="monitoringList" class="vr-monitor-list"></div>
+          </article>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/admin.js?v=20260331-2"></script>
+</body>
+</html>

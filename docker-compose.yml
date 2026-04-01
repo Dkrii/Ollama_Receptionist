@@ -1,0 +1,68 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kiosk-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - kiosk-net
+
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: kiosk-chroma
+    restart: unless-stopped
+    volumes:
+      - vector_data:/chroma/chroma
+    networks:
+      - kiosk-net
+
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: kiosk-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      KNOWLEDGE_DIR: /workspace/knowledge
+    depends_on:
+      ollama:
+        condition: service_started
+      chroma:
+        condition: service_started
+    volumes:
+      - ./app:/app
+      - ./knowledge:/workspace/knowledge
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - kiosk-net
+
+  init-model:
+    image: ollama/ollama:latest
+    container_name: kiosk-init-model
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c", "sleep 5; ollama pull qwen2.5:3b; ollama pull nomic-embed-text"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    networks:
+      - kiosk-net
+    restart: "no"
+
+volumes:
+  ollama_data:
+  vector_data:
+
+networks:
+  kiosk-net:
+    driver: bridge

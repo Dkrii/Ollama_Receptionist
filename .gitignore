@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+*.log
+chroma_data/
+knowledge/*.tmp
+knowledge/uploads/
