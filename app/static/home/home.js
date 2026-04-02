@@ -57,11 +57,18 @@ function addThinkingBubble() {
   return row;
 }
 
+function updateMicState() {
+  const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
+  if (micBtn) {
+    micBtn.disabled = isSending || isSpeaking;
+  }
+}
+
 function setComposerBusy(busy) {
   isSending = busy;
   sendBtn.disabled = busy;
-  micBtn.disabled = busy;
   input.disabled = busy;
+  updateMicState();
 }
 
 function speakText(text) {
@@ -69,7 +76,11 @@ function speakText(text) {
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'id-ID';
+  utter.onstart = updateMicState;
+  utter.onend = updateMicState;
+  utter.onerror = updateMicState;
   window.speechSynthesis.speak(utter);
+  updateMicState();
 }
 
 function resetSpeechQueue() {
@@ -79,6 +90,7 @@ function resetSpeechQueue() {
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
+  updateMicState();
 }
 
 function enqueueSpeechChunk(text) {
@@ -112,19 +124,27 @@ function flushSpeechRemainder() {
 }
 
 function drainSpeechQueue() {
-  if (!window.speechSynthesis || isSpeakingQueue) return;
-  if (!speechQueue.length) return;
+  if (!window.speechSynthesis) return;
+  if (!speechQueue.length) {
+    isSpeakingQueue = false;
+    updateMicState();
+    return;
+  }
+  if (isSpeakingQueue) return;
 
   isSpeakingQueue = true;
+  updateMicState();
   const next = speechQueue.shift();
   const utter = new SpeechSynthesisUtterance(next);
   utter.lang = 'id-ID';
   utter.onend = () => {
     isSpeakingQueue = false;
+    updateMicState();
     drainSpeechQueue();
   };
   utter.onerror = () => {
     isSpeakingQueue = false;
+    updateMicState();
     drainSpeechQueue();
   };
   window.speechSynthesis.speak(utter);
@@ -350,20 +370,79 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-micBtn.addEventListener('click', () => {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Speech recognition belum didukung browser ini.');
-    return;
-  }
+let micRecognition = null;
 
+function setupSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return null;
   const recognition = new SpeechRecognition();
   recognition.lang = 'id-ID';
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
-  recognition.start();
+  return recognition;
+}
 
-  recognition.onresult = (event) => {
-    input.value = event.results[0][0].transcript;
+function startRecording() {
+  if (isSending || micRecognition) return;
+  micRecognition = setupSpeechRecognition();
+  if (!micRecognition) {
+    alert('Speech recognition belum didukung browser ini.');
+    return;
+  }
+
+  micRecognition.onresult = (event) => {
+    if (event.results && event.results[0] && event.results[0][0]) {
+      input.value = event.results[0][0].transcript;
+      sendMessage();
+    }
   };
+
+  micRecognition.onerror = () => {
+    cleanupRecording();
+  };
+
+  micRecognition.onend = () => {
+    cleanupRecording();
+  };
+
+  try {
+    micRecognition.start();
+    micBtn.classList.add('is-recording');
+    input.placeholder = "Mendengarkan... Lepas untuk mengirim";
+  } catch (err) {
+    cleanupRecording();
+  }
+}
+
+function stopRecording() {
+  if (!micRecognition) return;
+  try {
+    micRecognition.stop();
+  } catch (err) {}
+  cleanupRecording();
+}
+
+function cleanupRecording() {
+  micBtn.classList.remove('is-recording');
+  input.placeholder = "Contoh: Jam operasional kantor?";
+  micRecognition = null;
+}
+
+micBtn.addEventListener('mousedown', startRecording);
+micBtn.addEventListener('touchstart', (e) => {
+  e.preventDefault(); // Prevent firing mousedown afterwards
+  startRecording();
+});
+
+// Use passive: false where needed or let default window handle it, but preventDefault above is typically enough
+window.addEventListener('mouseup', () => {
+  if (micRecognition) stopRecording();
+});
+micBtn.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  stopRecording();
+});
+micBtn.addEventListener('touchcancel', (e) => {
+  e.preventDefault();
+  stopRecording();
 });

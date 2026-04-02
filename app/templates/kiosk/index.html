@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Virtual Receptionist Kiosk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/kiosk/kiosk.css" />
+</head>
+<body>
+  <!-- Layar Penuh Avatar -->
+  <div class="kiosk-avatar" aria-hidden="true">
+    <div class="kiosk-avatar__placeholder">
+      <p>🖼️ Tempat Gambar Avatar 🖼️</p>
+      <span>(Ganti background-image dari .kiosk-avatar di CSS)</span>
+    </div>
+  </div>
+
+  <!-- UI Subtitle & Controls (Glassmorphism) -->
+  <main class="kiosk-ui">
+    <div class="kiosk-glass-panel">
+      <div class="kiosk-teleprompter">
+        <p id="systemStatus" class="kiosk-teleprompter__eyebrow">Sistem Siap</p>
+        <div id="subtitlesBox" class="kiosk-subtitle" aria-live="polite">
+          <span class="kiosk-subtitle__text">Halo! Saya Virtual Resepsionis. Ada yang bisa saya bantu?</span>
+        </div>
+      </div>
+      
+      <div class="kiosk-controls">
+        <button id="micBtn" class="kiosk-mic" type="button" aria-label="Tahan untuk bicara">
+          <svg class="kiosk-mic__icon" xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+        </button>
+        <p id="micHint" class="kiosk-hint">Tahan untuk bicara</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/kiosk/kiosk.js"></script>
+</body>
+</html>
