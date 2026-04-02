@@ -1,3 +1,119 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// --- THREE JS INITIALIZATION ---
+let renderer, scene, camera, avatarModel, avatarMixer;
+const blendshapeSettings = { jawInfluence: 0 };
+
+function init3D() {
+  const canvas = document.getElementById('avatarCanvas');
+  const container = document.getElementById('avatarContainer');
+  const placeholder = document.getElementById('avatarPlaceholder');
+  if (!canvas) return;
+
+  renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  
+  function resize() {
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    if(camera) {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+    }
+  }
+  window.addEventListener('resize', resize);
+
+  scene = new THREE.Scene();
+  
+  camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 100);
+  camera.position.set(0, 1.39, 1.2); // Adjust height to face level
+
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+  dirLight.position.set(2, 2, 5);
+  scene.add(dirLight);
+
+  const loader = new GLTFLoader();
+  loader.load('/static/kiosk/models/avatar.glb', (gltf) => {
+    avatarModel = gltf.scene;
+    avatarModel.position.set(0, 0, 0); // Offset down so camera points at chest/head
+    scene.add(avatarModel);
+
+    // Buka dan putar animasi bawaan dari Blender (misal 'Viky Character')
+    if (gltf.animations && gltf.animations.length > 0) {
+      avatarMixer = new THREE.AnimationMixer(avatarModel);
+      let clip = gltf.animations.find(c => c.name.toLowerCase().includes('viky'));
+      if (!clip) clip = gltf.animations[0];
+
+      if (clip) {
+        const action = avatarMixer.clipAction(clip);
+        action.play();
+      }
+    }
+    
+    if (placeholder) placeholder.style.opacity = '0';
+    setTimeout(() => { if (placeholder) placeholder.style.display = 'none'; }, 500);
+  }, undefined, (error) => {
+    console.warn('Menunggu file avatar 3D (avatar.glb) untuk dirender...', error);
+    if (placeholder) {
+      const p = placeholder.querySelector('p');
+      if(p) p.textContent = '⚠️ Menunggu 3D Model ⚠️';
+    }
+  });
+
+  resize();
+
+  let lastTime = performance.now();
+  function animate() {
+    requestAnimationFrame(animate);
+    const time = performance.now();
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+
+    // Putar frame animasi (seperti gerak napas badannya)
+    if (avatarMixer) {
+      avatarMixer.update(dt);
+    }
+
+    // Simulate Lip Sync if speaking
+    let targetJaw = 0;
+    const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
+    if (isSpeaking) {
+      // Procedural noise: simple sine waves combination for jaw movement
+      const wave = Math.sin(time * 0.015) * Math.sin(time * 0.008);
+      targetJaw = (wave + 1) * 0.35; // 0 to 0.7
+    }
+    
+    // Smooth transition
+    blendshapeSettings.jawInfluence += (targetJaw - blendshapeSettings.jawInfluence) * 15 * dt;
+
+    if (avatarModel) {
+      avatarModel.traverse((child) => {
+        if (child.isMesh && child.morphTargetDictionary) {
+          // Fallback to multiple common slider names
+          const keys = Object.keys(child.morphTargetDictionary);
+          const jawKey = keys.find(k => {
+            const low = k.toLowerCase();
+            return low.includes('jaw') || low.includes('mouthopen') || low.includes('aa') || low.includes('viseme');
+          });
+          
+          if (jawKey) {
+            const index = child.morphTargetDictionary[jawKey];
+            child.morphTargetInfluences[index] = blendshapeSettings.jawInfluence;
+          }
+        }
+      });
+    }
+
+    renderer.render(scene, camera);
+  }
+  animate();
+}
+
+document.addEventListener('DOMContentLoaded', init3D);
+// --- END THREE JS ---
+
 const subtitlesBox = document.getElementById('subtitlesBox');
 const micBtn = document.getElementById('micBtn');
 const micHint = document.getElementById('micHint');

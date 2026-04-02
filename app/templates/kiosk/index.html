@@ -8,14 +8,22 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/kiosk/kiosk.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 <body>
   <!-- Layar Penuh Avatar -->
-  <div class="kiosk-avatar" aria-hidden="true">
-    <div class="kiosk-avatar__placeholder">
-      <p>🖼️ Tempat Gambar Avatar 🖼️</p>
-      <span>(Ganti background-image dari .kiosk-avatar di CSS)</span>
+  <div class="kiosk-avatar" id="avatarContainer" aria-hidden="true">
+    <div class="kiosk-avatar__placeholder" id="avatarPlaceholder">
+      <p>🖼️ Memuat 3D Avatar... 🖼️</p>
     </div>
+    <canvas id="avatarCanvas" class="kiosk-canvas"></canvas>
   </div>
 
   <!-- UI Subtitle & Controls (Glassmorphism) -->
@@ -42,6 +50,6 @@
     </div>
   </main>
 
-  <script src="/static/kiosk/kiosk.js"></script>
+  <script type="module" src="/static/kiosk/kiosk.js"></script>
 </body>
 </html>

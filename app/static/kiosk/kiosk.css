@@ -68,6 +68,17 @@ body {
   font-weight: 500;
 }
 
+.kiosk-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  object-fit: cover;
+  pointer-events: none; /* Let clicks pass to bottom level if needed, UI is naturally on top */
+}
+
 /* UI Overlay Container */
 .kiosk-ui {
   position: absolute;
