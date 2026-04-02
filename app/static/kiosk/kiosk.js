@@ -124,8 +124,17 @@ let speechQueue = [];
 let isSpeakingQueue = false;
 let speechResidualBuffer = '';
 
+function setThinkingStatus(text = '') {
+  if (!systemStatus) return;
+  systemStatus.textContent = text;
+  systemStatus.hidden = !text;
+}
+
+setThinkingStatus();
+
 // Subtitle updates
 function setSubtitle(text, role = 'bot') {
+  setThinkingStatus();
   subtitlesBox.innerHTML = '';
   const span = document.createElement('span');
   span.className = `kiosk-subtitle__text kiosk-subtitle__text--${role}`;
@@ -141,9 +150,7 @@ function setThinking() {
        <span class="kiosk-dot"></span>
     </span>
   `;
-  if (systemStatus) {
-    systemStatus.textContent = "AI Sedang Berpikir...";
-  }
+  setThinkingStatus('AI Sedang Berpikir...');
 }
 
 // Mic & TTS State management
@@ -152,14 +159,6 @@ function updateMicState() {
   if (micBtn) {
     micBtn.disabled = isSending || isSpeaking;
   }
-}
-
-function setSystemBusy(busy) {
-  isSending = busy;
-  if (!busy && systemStatus) {
-    systemStatus.textContent = "";
-  }
-  updateMicState();
 }
 
 // Speech Synthesis
@@ -236,7 +235,8 @@ async function sendMessage(message) {
   if (isSending) return;
   if (!message.trim()) return;
 
-  setSystemBusy(true);
+  isSending = true;
+  updateMicState();
   resetSpeechQueue();
   
   // Expand glass panel to show AI response
@@ -288,11 +288,11 @@ async function sendMessage(message) {
         
         if (event.type === 'token') {
           const token = event.value || '';
+          if (token) {
+            setThinkingStatus();
+          }
           finalAnswer += token;
           if (finalAnswer.trim()) {
-            if (systemStatus && systemStatus.textContent !== "") {
-              systemStatus.textContent = "";
-            }
             answerSpan.textContent = finalAnswer;
             subtitlesBox.scrollTop = subtitlesBox.scrollHeight;
             enqueueSpeechChunk(token);
@@ -316,7 +316,9 @@ async function sendMessage(message) {
     resetSpeechQueue();
     speakText(fallback);
   } finally {
-    setSystemBusy(false);
+    isSending = false;
+    setThinkingStatus();
+    updateMicState();
   }
 }
 
@@ -342,25 +344,13 @@ function startRecording() {
   }
 
   micRecognition.onresult = (event) => {
-    let interimTranscript = '';
     let finalTranscript = '';
 
     for (let i = event.resultIndex; i < event.results.length; ++i) {
       if (event.results[i].isFinal) {
         finalTranscript += event.results[i][0].transcript;
-      } else {
-        interimTranscript += event.results[i][0].transcript;
       }
     }
-    
-    // Show what user is saying in real-time
-    // Di-disable sesuai request, pengguna tidak perlu melihat pertanyaannya
-    /*
-    const displayTxt = finalTranscript || interimTranscript;
-    if (displayTxt) {
-      setSubtitle(`"${displayTxt}"`, 'user');
-    }
-    */
     
     // Auto-send when speech engine decides it's final
     if (finalTranscript.trim() && event.results[event.results.length - 1].isFinal) {

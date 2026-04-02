@@ -73,29 +73,8 @@ Response:
 - `RAG_FALLBACK_POLICY=context_only` (default): selama retrieval menemukan konteks, AI tetap menjawab dari konteks.
 - `RAG_FALLBACK_POLICY=strict`: aktifkan fallback agresif untuk pertanyaan/jawaban yang dinilai kurang relevan.
 
-## 6) Windows Kiosk Mode (Autostart + Watchdog)
+## 6) Windows Kiosk Mode (Manual)
 
-### One-command provisioning
-- Full (Administrator): `powershell -ExecutionPolicy Bypass -File .\scripts\setup-kiosk.ps1`
-- Non-admin quick setup (tanpa register task + tanpa launch browser):
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\setup-kiosk.ps1 -SkipTaskRegistration -SkipLaunch`
-
-### Manual control
-- Start stack: `powershell -ExecutionPolicy Bypass -File .\scripts\start-kiosk.ps1`
-- Launch fullscreen kiosk browser: `powershell -ExecutionPolicy Bypass -File .\scripts\launch-kiosk.ps1`
-- Stop kiosk: `powershell -ExecutionPolicy Bypass -File .\scripts\stop-kiosk.ps1`
-
-### Enable auto-start on user logon
-Jalankan langkah ini dari **PowerShell Run as Administrator**.
-
-1. Register scheduled tasks:
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\register-kiosk-tasks.ps1`
-2. Tasks that will be created:
-  - `Kiosk-StartStack` (start Docker services)
-  - `Kiosk-LaunchUI` (open Edge fullscreen kiosk)
-  - `Kiosk-Watchdog` (health check loop + auto recovery)
-3. Verify tasks:
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\verify-kiosk-tasks.ps1`
-
-### Disable auto-start
-- `powershell -ExecutionPolicy Bypass -File .\scripts\unregister-kiosk-tasks.ps1`
+- Start stack: `docker compose up -d ollama chroma app`
+- Open UI: `http://localhost:8000`
+- Stop stack: `docker compose stop app chroma ollama`

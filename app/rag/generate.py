@@ -222,12 +222,12 @@ def generate_answer(question: str, context: str) -> str:
         return FALLBACK_MESSAGE
 
     prompt = f"""KONTEKS RAG:
-{context}
+                {context}
 
-PERTANYAAN PENGGUNA:
-{question}
+                PERTANYAAN PENGGUNA:
+                {question}
 
-Jawab sesuai aturan."""
+                Jawab sesuai aturan."""
 
     response = _http_session.post(
         f"{settings.ollama_base_url}/api/generate",
@@ -263,12 +263,12 @@ def generate_answer_stream(question: str, context: str) -> Iterator[str]:
         return
 
     prompt = f"""KONTEKS RAG:
-{context}
+                {context}
 
-PERTANYAAN PENGGUNA:
-{question}
+                PERTANYAAN PENGGUNA:
+                {question}
 
-Jawab sesuai aturan."""
+                Jawab sesuai aturan."""
 
     with _http_session.post(
         f"{settings.ollama_base_url}/api/generate",

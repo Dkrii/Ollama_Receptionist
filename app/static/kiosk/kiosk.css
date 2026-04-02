@@ -198,12 +198,6 @@ body {
   letter-spacing: -0.01em;
 }
 
-.kiosk-subtitle__text--user {
-  color: var(--k-akeb-blue);
-  font-style: italic;
-  font-weight: 500;
-}
-
 .kiosk-subtitle__text--error {
   color: var(--k-akeb-red);
 }
@@ -212,7 +206,6 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-top: 14px;
 }
 
 .kiosk-dot {
@@ -311,6 +304,7 @@ body {
   letter-spacing: 0.12em;
   color: var(--k-text-muted);
   transition: color 0.3s ease;
+  text-align: center;
 }
 
 .kiosk-mic.is-recording + .kiosk-hint {
@@ -338,7 +332,6 @@ body {
 @media (max-width: 900px) {
   .kiosk-ui { padding: 24px; }
   .kiosk-glass-panel {
-    grid-template-columns: 1fr;
     gap: 28px;
     padding: 28px 32px;
     align-items: center;
