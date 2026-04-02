@@ -21,18 +21,18 @@
   <!-- Layar Penuh Avatar -->
   <div class="kiosk-avatar" id="avatarContainer" aria-hidden="true">
     <div class="kiosk-avatar__placeholder" id="avatarPlaceholder">
-      <p>🖼️ Memuat 3D Avatar... 🖼️</p>
+      <p>🖼️ Memuat Avatar... 🖼️</p>
     </div>
     <canvas id="avatarCanvas" class="kiosk-canvas"></canvas>
   </div>
 
   <!-- UI Subtitle & Controls (Glassmorphism) -->
   <main class="kiosk-ui">
-    <div class="kiosk-glass-panel">
-      <div class="kiosk-teleprompter">
-        <p id="systemStatus" class="kiosk-teleprompter__eyebrow">Sistem Siap</p>
+    <div id="glassPanel" class="kiosk-glass-panel">
+      <div id="teleprompterContainer" class="kiosk-teleprompter">
+        <p id="systemStatus" class="kiosk-teleprompter__eyebrow"></p>
         <div id="subtitlesBox" class="kiosk-subtitle" aria-live="polite">
-          <span class="kiosk-subtitle__text">Halo! Saya Virtual Resepsionis. Ada yang bisa saya bantu?</span>
+          <!-- Teks akan muncul di sini -->
         </div>
       </div>
       

@@ -141,7 +141,9 @@ function setThinking() {
        <span class="kiosk-dot"></span>
     </span>
   `;
-  systemStatus.textContent = "AI Sedang Berpikir...";
+  if (systemStatus) {
+    systemStatus.textContent = "AI Sedang Berpikir...";
+  }
 }
 
 // Mic & TTS State management
@@ -154,7 +156,9 @@ function updateMicState() {
 
 function setSystemBusy(busy) {
   isSending = busy;
-  if (!busy) systemStatus.textContent = "Sistem Siap";
+  if (!busy && systemStatus) {
+    systemStatus.textContent = "";
+  }
   updateMicState();
 }
 
@@ -234,6 +238,11 @@ async function sendMessage(message) {
 
   setSystemBusy(true);
   resetSpeechQueue();
+  
+  // Expand glass panel to show AI response
+  const glassPanel = document.getElementById('glassPanel');
+  if (glassPanel) glassPanel.classList.add('is-expanded');
+
   setThinking();
   
   let finalAnswer = '';
@@ -281,8 +290,8 @@ async function sendMessage(message) {
           const token = event.value || '';
           finalAnswer += token;
           if (finalAnswer.trim()) {
-            if (systemStatus.textContent !== "AI Menjawab") {
-              systemStatus.textContent = "AI Menjawab";
+            if (systemStatus && systemStatus.textContent !== "") {
+              systemStatus.textContent = "";
             }
             answerSpan.textContent = finalAnswer;
             subtitlesBox.scrollTop = subtitlesBox.scrollHeight;
@@ -345,10 +354,13 @@ function startRecording() {
     }
     
     // Show what user is saying in real-time
+    // Di-disable sesuai request, pengguna tidak perlu melihat pertanyaannya
+    /*
     const displayTxt = finalTranscript || interimTranscript;
     if (displayTxt) {
       setSubtitle(`"${displayTxt}"`, 'user');
     }
+    */
     
     // Auto-send when speech engine decides it's final
     if (finalTranscript.trim() && event.results[event.results.length - 1].isFinal) {
@@ -364,8 +376,11 @@ function startRecording() {
     micRecognition.start();
     micBtn.classList.add('is-recording');
     micHint.textContent = "Lepas untuk mengirim";
-    systemStatus.textContent = "Mendengarkan...";
-    setSubtitle("...", "user");
+    
+    // Collapse card saat bertanya
+    const glassPanel = document.getElementById('glassPanel');
+    if (glassPanel) glassPanel.classList.remove('is-expanded');
+    
   } catch (err) {
     cleanupRecording();
   }

@@ -98,13 +98,16 @@ body {
 /* The Glassmorphism Panel on a Light Theme */
 .kiosk-glass-panel {
   pointer-events: auto;
-  max-width: 1200px;
-  margin: 0 auto;
+  /* Default mode: Shrink to fit the Mic button, centered */
   width: 100%;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 40px;
-  align-items: end;
+  max-width: 210px; /* Lebar minimum pas tombol mic + padding */
+  margin: 0 auto;
+  
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 0;
   
   /* Clean, vibrant, icy frosted glass */
   background: var(--k-glass-bg);
@@ -112,10 +115,19 @@ body {
   -webkit-backdrop-filter: blur(36px) saturate(1.4);
   border: 1px solid var(--k-glass-border);
   box-shadow: var(--k-shadow-soft), inset 0 2px 0 rgba(255,255,255,1);
-  border-radius: 36px;
-  padding: 36px 54px;
+  
+  border-radius: 48px;
+  padding: 24px 32px;
   position: relative;
   overflow: hidden;
+  transition: all 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.kiosk-glass-panel.is-expanded {
+  max-width: 1200px; /* Melebar ke layar penuh (terbatasi 1200) */
+  border-radius: 36px;
+  padding: 36px 54px;
+  gap: 40px;
 }
 
 /* Subtle branding line at the top of the glass panel inspired by Akebono */
@@ -134,6 +146,16 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: all 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.kiosk-glass-panel.is-expanded .kiosk-teleprompter {
+  width: 100%;
+  flex: 1;
+  opacity: 1;
 }
 
 .kiosk-teleprompter__eyebrow {
@@ -152,13 +174,20 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start; /* So it scrolls top down cleanly */
+  padding-right: 18px; /* space for scrollbar */
 }
 
-/* Hide scrollbar for clean UI */
+/* Custom scrollbar for clean UI */
 .kiosk-subtitle::-webkit-scrollbar {
-  width: 0;
+  width: 6px;
+}
+.kiosk-subtitle::-webkit-scrollbar-track {
   background: transparent;
+}
+.kiosk-subtitle::-webkit-scrollbar-thumb {
+  background: rgba(0, 91, 159, 0.3);
+  border-radius: 999px;
 }
 
 .kiosk-subtitle__text {
