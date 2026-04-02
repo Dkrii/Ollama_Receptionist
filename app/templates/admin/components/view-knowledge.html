@@ -1,0 +1,75 @@
+<section class="vr-admin-view is-hidden" id="adminViewKnowledge" data-view="knowledge">
+  <section class="vr-admin-pagehead">
+    <h2>Upload Documents</h2>
+  </section>
+
+  <section class="vr-knowledge-layout">
+    <article class="vr-admin-card vr-upload-hero">
+      <div class="vr-admin-card__accent"></div>
+
+      <div class="vr-upload-dropzone" id="uploadDropzone">
+        <span class="material-symbols-outlined vr-upload-dropzone__icon">cloud_upload</span>
+        <p class="vr-upload-dropzone__title">Drag & drop files here</p>
+        <p class="vr-admin-note">Format didukung: PDF, TXT, MD, DOCX</p>
+        <button id="selectFilesBtn" class="vr-button vr-button--primary" type="button">Select Files</button>
+        <input id="docFiles" type="file" multiple accept=".txt,.md,.pdf,.docx" class="vr-file-input-hidden" />
+      </div>
+
+      <p id="selectedFileInfo" class="vr-admin-note">Belum ada file dipilih.</p>
+
+      <div class="vr-admin-actions">
+        <button id="uploadBtn" class="vr-button vr-button--primary" type="button">Upload</button>
+        <button id="reindexBtn" class="vr-button vr-button--secondary" type="button">Reindex</button>
+        <button id="refreshStatusBtn" class="vr-button vr-button--secondary" type="button">Refresh</button>
+      </div>
+
+    </article>
+
+    <aside class="vr-knowledge-sidecards">
+      <article class="vr-admin-card vr-health-card">
+        <h4>Instance Health</h4>
+        <div class="vr-health-row">
+          <span>Coverage</span>
+          <strong id="healthCoverageValue">-</strong>
+        </div>
+        <div class="vr-health-meter">
+          <div id="healthCoverageBar" class="vr-health-meter__fill"></div>
+        </div>
+        <div class="vr-health-row">
+          <span>Queue Depth</span>
+          <strong id="healthQueueValue">-</strong>
+        </div>
+        <div class="vr-health-row">
+          <span>Total Chunks</span>
+          <strong id="healthChunksValue">-</strong>
+        </div>
+      </article>
+
+    </aside>
+  </section>
+
+  <section class="vr-knowledge-recent">
+    <div class="vr-knowledge-recent__head">
+      <div>
+        <h3>Recent Uploads</h3>
+      </div>
+      <button id="clearKnowledgeHistoryBtn" class="vr-knowledge-clear" type="button">Clear History</button>
+    </div>
+
+    <div class="vr-knowledge-table-wrap">
+      <table class="vr-knowledge-table" aria-label="Data knowledge">
+        <thead>
+          <tr>
+            <th>Document Name</th>
+            <th>Chunks</th>
+            <th>Status</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="knowledgeTableBody"></tbody>
+      </table>
+    </div>
+
+    <p id="knowledgeTableEmpty" class="vr-knowledge-list__empty is-hidden">Belum ada data knowledge untuk ditampilkan.</p>
+  </section>
+</section>

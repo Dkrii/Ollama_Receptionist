@@ -125,3 +125,95 @@ class AdminService:
             "services": services,
             "checked_at": datetime.now(UTC).isoformat(),
         }
+
+    @staticmethod
+    def _normalize_metadata_path(raw_path: str | None, knowledge_dir: Path) -> str | None:
+        if not raw_path:
+            return None
+
+        path_obj = Path(raw_path)
+        if path_obj.is_absolute():
+            try:
+                return str(path_obj.relative_to(knowledge_dir))
+            except ValueError:
+                return path_obj.name
+        return str(path_obj)
+
+    @staticmethod
+    def get_knowledge_summary() -> dict:
+        knowledge_dir = AdminService._ensure_knowledge_dir()
+        documents = list_documents(knowledge_dir)
+        source_paths = [str(path.relative_to(knowledge_dir)) for path in documents]
+        source_set = set(source_paths)
+
+        indexed_source_set: set[str] = set()
+        chunk_by_source: dict[str, int] = {}
+        chunks_total = 0
+        index_status = "active"
+        index_detail = "Index siap digunakan"
+
+        try:
+            collection = get_collection()
+            chunks_total = collection.count()
+            payload = collection.get(include=["metadatas"])
+            metadatas = payload.get("metadatas", [])
+
+            for metadata in metadatas:
+                normalized = AdminService._normalize_metadata_path(metadata.get("path"), knowledge_dir)
+                if not normalized:
+                    normalized = metadata.get("source")
+                if not normalized:
+                    continue
+
+                indexed_source_set.add(normalized)
+                chunk_by_source[normalized] = chunk_by_source.get(normalized, 0) + 1
+        except Exception as exc:
+            index_status = "warning"
+            index_detail = f"Index tidak tersedia: {exc}"
+
+        indexed_known_sources = indexed_source_set.intersection(source_set)
+        indexed_documents = len(indexed_known_sources)
+        total_documents = len(source_paths)
+        unindexed_sources = sorted(source_set - indexed_known_sources)
+
+        coverage_pct = 0
+        if total_documents > 0:
+            coverage_pct = round((indexed_documents / total_documents) * 100)
+
+        if total_documents == 0:
+            readiness = "warning"
+            readiness_label = "Belum ada knowledge"
+        elif unindexed_sources:
+            readiness = "warning"
+            readiness_label = "Perlu reindex"
+        elif index_status == "warning":
+            readiness = "warning"
+            readiness_label = "Index bermasalah"
+        else:
+            readiness = "active"
+            readiness_label = "Knowledge siap"
+
+        top_sources = sorted(
+            [
+                {"source": source, "chunks": count}
+                for source, count in chunk_by_source.items()
+                if source in source_set
+            ],
+            key=lambda item: item["chunks"],
+            reverse=True,
+        )[:6]
+
+        return {
+            "readiness": readiness,
+            "readiness_label": readiness_label,
+            "coverage_pct": coverage_pct,
+            "total_documents": total_documents,
+            "indexed_documents": indexed_documents,
+            "unindexed_documents": len(unindexed_sources),
+            "chunks_total": chunks_total,
+            "unindexed_sources": unindexed_sources[:8],
+            "top_sources": top_sources,
+            "index_status": index_status,
+            "index_detail": index_detail,
+            "checked_at": datetime.now(UTC).isoformat(),
+        }

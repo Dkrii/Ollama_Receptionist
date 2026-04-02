@@ -15,3 +15,7 @@ class AdminAppService:
     @staticmethod
     def monitoring_status() -> dict:
         return AdminService.get_monitoring_status()
+
+    @staticmethod
+    def knowledge_summary() -> dict:
+        return AdminService.get_knowledge_summary()

@@ -1,0 +1,41 @@
+<section class="vr-admin-view" id="adminViewDashboard" data-view="dashboard">
+  <section class="vr-admin-pagehead">
+    <h2>Dashboard</h2>
+    <p>Overview knowledge base lokal dan status indexing.</p>
+  </section>
+
+  <section class="vr-dash-stats">
+    <article class="vr-dash-stat vr-dash-stat--blue">
+      <p>Total Documents Indexed</p>
+      <strong id="dashIndexedDocs">0</strong>
+      <span id="dashCheckedAt">Updated -</span>
+    </article>
+
+    <article class="vr-dash-stat vr-dash-stat--blue">
+      <p>Total Chunks</p>
+      <strong id="dashChunksTotal">0</strong>
+      <span>Stored in vector index</span>
+    </article>
+
+    <article class="vr-dash-stat vr-dash-stat--red">
+      <p>Knowledge Status</p>
+      <strong id="dashReadinessLabel">Unknown</strong>
+      <span id="dashCoverage">Coverage -</span>
+    </article>
+  </section>
+
+  <section class="vr-dash-grid">
+    <article class="vr-admin-card vr-dash-activity">
+      <div class="vr-dash-activity__head">
+        <h3>Recent Activity</h3>
+      </div>
+      <div id="dashRecentActivity" class="vr-dash-activity__list"></div>
+    </article>
+
+    <article class="vr-admin-card vr-dash-insight">
+      <h4>Curator Insights</h4>
+      <p id="dashInsightText">-</p>
+      <button class="vr-button vr-button--primary" type="button" data-view="knowledge">Open Knowledge</button>
+    </article>
+  </section>
+</section>

@@ -30,3 +30,11 @@ def monitoring_status():
         return JSONResponse(AdminAppService.monitoring_status())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/admin/knowledge-summary")
+def knowledge_summary():
+    try:
+        return JSONResponse(AdminAppService.knowledge_summary())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

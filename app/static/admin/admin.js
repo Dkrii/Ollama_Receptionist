@@ -1,12 +1,31 @@
 const uploadBtn = document.getElementById('uploadBtn');
 const docFiles = document.getElementById('docFiles');
-const uploadResult = document.getElementById('uploadResult');
 
 const reindexBtn = document.getElementById('reindexBtn');
 const refreshStatusBtn = document.getElementById('refreshStatusBtn');
-const reindexResult = document.getElementById('reindexResult');
-const monitoringList = document.getElementById('monitoringList');
 const adminPageStatus = document.getElementById('adminPageStatus');
+const knowledgeTableBody = document.getElementById('knowledgeTableBody');
+const knowledgeTableEmpty = document.getElementById('knowledgeTableEmpty');
+const selectFilesBtn = document.getElementById('selectFilesBtn');
+const selectedFileInfo = document.getElementById('selectedFileInfo');
+const uploadDropzone = document.getElementById('uploadDropzone');
+const clearKnowledgeHistoryBtn = document.getElementById('clearKnowledgeHistoryBtn');
+const healthCoverageValue = document.getElementById('healthCoverageValue');
+const healthCoverageBar = document.getElementById('healthCoverageBar');
+const healthQueueValue = document.getElementById('healthQueueValue');
+const healthChunksValue = document.getElementById('healthChunksValue');
+
+let stagedFiles = null;
+
+const navViewItems = document.querySelectorAll('.vr-admin-nav__item[data-view]');
+const viewSections = document.querySelectorAll('.vr-admin-view[data-view]');
+const dashIndexedDocs = document.getElementById('dashIndexedDocs');
+const dashChunksTotal = document.getElementById('dashChunksTotal');
+const dashReadinessLabel = document.getElementById('dashReadinessLabel');
+const dashCoverage = document.getElementById('dashCoverage');
+const dashCheckedAt = document.getElementById('dashCheckedAt');
+const dashRecentActivity = document.getElementById('dashRecentActivity');
+const dashInsightText = document.getElementById('dashInsightText');
 
 function setPageStatus(text, mode = 'active') {
   adminPageStatus.textContent = text;
@@ -19,14 +38,103 @@ function setPageStatus(text, mode = 'active') {
   }
 }
 
+function updateSelectedFilesInfo() {
+  if (!selectedFileInfo || !docFiles) return;
+
+  const activeFiles = stagedFiles || docFiles.files;
+  const count = activeFiles?.length || 0;
+  if (!count) {
+    selectedFileInfo.textContent = 'Belum ada file dipilih.';
+    return;
+  }
+
+  const names = Array.from(activeFiles).slice(0, 2).map((file) => file.name);
+  const suffix = count > 2 ? ` +${count - 2} file` : '';
+  selectedFileInfo.textContent = `Dipilih: ${names.join(', ')}${suffix}`;
+}
+
+function activateView(viewName) {
+  for (const item of navViewItems) {
+    item.classList.toggle('is-active', item.dataset.view === viewName);
+  }
+
+  for (const section of viewSections) {
+    const shouldShow = section.dataset.view === viewName;
+    section.classList.toggle('is-hidden', !shouldShow);
+  }
+}
+
+function getViewFromHash() {
+  if (window.location.hash === '#knowledge') return 'knowledge';
+  return 'dashboard';
+}
+
+function renderDashboardActivity(summaryData) {
+  const checkedAt = summaryData.checked_at
+    ? new Date(summaryData.checked_at).toLocaleString('id-ID')
+    : '-';
+
+  const activities = [
+    ...(summaryData.top_sources || []).map((source) => ({
+      title: source.source,
+      detail: `${source.chunks} chunk terindeks`,
+      time: 'baru'
+    })),
+    ...(summaryData.unindexed_sources || []).slice(0, 2).map((source) => ({
+      title: source,
+      detail: 'Belum terindeks',
+      time: 'perlu aksi'
+    }))
+  ].slice(0, 4);
+
+  dashRecentActivity.innerHTML = '';
+  if (!activities.length) {
+    const empty = document.createElement('div');
+    empty.className = 'vr-dash-activity__item';
+    empty.innerHTML = '<div><strong>Belum ada aktivitas</strong><span>Upload dokumen untuk memulai.</span></div>';
+    dashRecentActivity.appendChild(empty);
+    return;
+  }
+
+  for (const activity of activities) {
+    const item = document.createElement('div');
+    item.className = 'vr-dash-activity__item';
+    item.innerHTML = `
+      <div>
+        <strong>${activity.title}</strong>
+        <span>${activity.detail}</span>
+      </div>
+      <span>${activity.time}</span>
+    `;
+    dashRecentActivity.appendChild(item);
+  }
+
+  dashCheckedAt.textContent = `Updated ${checkedAt}`;
+}
+
+function renderDashboard(summaryData) {
+  const coverage = Number(summaryData.coverage_pct || 0);
+  dashIndexedDocs.textContent = summaryData.indexed_documents ?? 0;
+  dashChunksTotal.textContent = summaryData.chunks_total ?? 0;
+  dashReadinessLabel.textContent = summaryData.readiness_label || 'Unknown';
+  dashCoverage.textContent = `Coverage ${coverage}%`;
+
+  dashInsightText.textContent = summaryData.unindexed_documents > 0
+    ? `Masih ada ${summaryData.unindexed_documents} dokumen belum terindeks. Jalankan reindex agar retrieval optimal.`
+    : 'Knowledge sudah sinkron. Pertahankan alur upload lalu reindex untuk menjaga kualitas jawaban AI.';
+
+  renderDashboardActivity(summaryData);
+}
+
 async function uploadDocuments() {
-  if (!docFiles.files || !docFiles.files.length) {
-    uploadResult.textContent = 'Pilih file terlebih dahulu.';
+  const activeFiles = stagedFiles || docFiles.files;
+  if (!activeFiles || !activeFiles.length) {
+    setPageStatus('Pilih file terlebih dahulu', 'warning');
     return;
   }
 
   const formData = new FormData();
-  for (const file of docFiles.files) {
+  for (const file of activeFiles) {
     formData.append('files', file);
   }
 
@@ -38,64 +146,104 @@ async function uploadDocuments() {
   if (!response.ok) throw new Error('Upload gagal');
   const data = await response.json();
   const skipped = data.skipped?.length || 0;
-  uploadResult.textContent = skipped
+  const uploadMessage = skipped
     ? `Upload selesai: ${data.uploaded_count} file, ${skipped} file dilewati.`
     : `Upload selesai: ${data.uploaded_count} file.`;
+  setPageStatus(uploadMessage, skipped ? 'warning' : 'active');
+  stagedFiles = null;
+  if (docFiles) {
+    docFiles.value = '';
+  }
+  updateSelectedFilesInfo();
 }
 
-function renderMonitoring(statusData) {
-  monitoringList.innerHTML = '';
+function renderKnowledgeHealth(summaryData) {
+  if (healthCoverageValue) {
+    healthCoverageValue.textContent = `${summaryData.coverage_pct ?? 0}%`;
+  }
+  if (healthCoverageBar) {
+    healthCoverageBar.style.width = `${summaryData.coverage_pct ?? 0}%`;
+  }
+  if (healthQueueValue) {
+    healthQueueValue.textContent = `${summaryData.unindexed_documents ?? 0} tasks`;
+  }
+  if (healthChunksValue) {
+    healthChunksValue.textContent = `${summaryData.chunks_total ?? 0}`;
+  }
+}
 
-  for (const service of statusData.services || []) {
-    const card = document.createElement('div');
-    card.className = 'vr-monitor-item';
+function renderKnowledgeTable(summaryData) {
+  if (!knowledgeTableBody || !knowledgeTableEmpty) return;
 
-    const head = document.createElement('div');
-    head.className = 'vr-monitor-item__head';
+  const checkedAt = summaryData.checked_at
+    ? new Date(summaryData.checked_at).toLocaleString('id-ID')
+    : '-';
 
-    const name = document.createElement('strong');
-    name.textContent = service.name;
+  const indexedRows = (summaryData.top_sources || []).map((source) => ({
+    document: source.source,
+    status: 'indexed',
+    chunks: source.chunks,
+    updatedAt: checkedAt
+  }));
 
-    const label = document.createElement('span');
-    label.className = `vr-status-badge ${service.status === 'active' ? 'vr-status-badge--active' : 'vr-status-badge--warning'}`;
-    label.textContent = service.label;
+  const pendingRows = (summaryData.unindexed_sources || []).map((source) => ({
+    document: source,
+    status: 'pending',
+    chunks: '-',
+    updatedAt: checkedAt
+  }));
 
-    head.appendChild(name);
-    head.appendChild(label);
+  const tableRows = [...indexedRows, ...pendingRows];
+  knowledgeTableBody.innerHTML = '';
 
-    const detail = document.createElement('p');
-    detail.className = 'vr-admin-note';
-    detail.textContent = service.detail;
-
-    card.appendChild(head);
-    card.appendChild(detail);
-    monitoringList.appendChild(card);
+  for (const rowData of tableRows) {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${rowData.document}</td>
+      <td>${rowData.chunks}</td>
+      <td>
+        <span class="vr-knowledge-status vr-knowledge-status--${rowData.status}">
+          ${rowData.status === 'indexed' ? 'Indexed' : 'Pending'}
+        </span>
+      </td>
+      <td>${rowData.updatedAt}</td>
+    `;
+    knowledgeTableBody.appendChild(row);
   }
 
+  knowledgeTableEmpty.classList.toggle('is-hidden', tableRows.length > 0);
+}
+
+function renderKnowledgeSummary(summaryData) {
+  renderKnowledgeHealth(summaryData);
+  renderKnowledgeTable(summaryData);
+
+  renderDashboard(summaryData);
+
   setPageStatus(
-    `Monitoring: ${statusData.overall_label}`,
-    statusData.overall === 'active' ? 'active' : 'warning'
+    `Knowledge: ${summaryData.readiness_label}`,
+    summaryData.readiness === 'active' ? 'active' : 'warning'
   );
 }
 
-async function refreshMonitoring() {
-  const response = await fetch('/api/admin/status');
-  if (!response.ok) throw new Error('Gagal memuat status service');
+async function refreshKnowledgeSummary() {
+  const response = await fetch('/api/admin/knowledge-summary');
+  if (!response.ok) throw new Error('Gagal memuat ringkasan knowledge');
   const data = await response.json();
-  renderMonitoring(data);
+  renderKnowledgeSummary(data);
 }
 
 async function triggerReindex() {
   const response = await fetch('/api/reindex', { method: 'POST' });
   if (!response.ok) throw new Error('Reindex gagal');
   const data = await response.json();
-  reindexResult.textContent = `Reindex sukses: ${data.documents} dokumen, ${data.chunks} chunk.`;
-  setPageStatus('Reindex selesai', 'active');
+  setPageStatus(`Reindex sukses: ${data.documents} dokumen, ${data.chunks} chunk.`, 'active');
 }
 
 uploadBtn.addEventListener('click', async () => {
   try {
     await uploadDocuments();
+    await refreshKnowledgeSummary();
     setPageStatus('Upload dokumen selesai', 'active');
   } catch (error) {
     setPageStatus('Warning: upload dokumen gagal', 'warning');
@@ -105,7 +253,7 @@ uploadBtn.addEventListener('click', async () => {
 reindexBtn.addEventListener('click', async () => {
   try {
     await triggerReindex();
-    await refreshMonitoring();
+    await refreshKnowledgeSummary();
   } catch (error) {
     setPageStatus('Warning: reindex gagal', 'warning');
   }
@@ -113,15 +261,78 @@ reindexBtn.addEventListener('click', async () => {
 
 refreshStatusBtn.addEventListener('click', async () => {
   try {
-    await refreshMonitoring();
+    await refreshKnowledgeSummary();
   } catch (error) {
-    setPageStatus('Warning: monitoring gagal', 'warning');
+    setPageStatus('Warning: refresh knowledge gagal', 'warning');
   }
+});
+
+if (selectFilesBtn && docFiles) {
+  selectFilesBtn.addEventListener('click', () => docFiles.click());
+}
+
+if (docFiles) {
+  docFiles.addEventListener('change', () => {
+    stagedFiles = null;
+    updateSelectedFilesInfo();
+  });
+}
+
+if (uploadDropzone && docFiles) {
+  const preventDefaults = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach((eventName) => {
+    uploadDropzone.addEventListener(eventName, preventDefaults);
+  });
+
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    uploadDropzone.addEventListener(eventName, () => uploadDropzone.classList.add('is-dragover'));
+  });
+
+  ['dragleave', 'drop'].forEach((eventName) => {
+    uploadDropzone.addEventListener(eventName, () => uploadDropzone.classList.remove('is-dragover'));
+  });
+
+  uploadDropzone.addEventListener('drop', (event) => {
+    const files = event.dataTransfer?.files;
+    if (!files?.length) return;
+    stagedFiles = files;
+    updateSelectedFilesInfo();
+  });
+}
+
+if (clearKnowledgeHistoryBtn && knowledgeTableBody && knowledgeTableEmpty) {
+  clearKnowledgeHistoryBtn.addEventListener('click', () => {
+    knowledgeTableBody.innerHTML = '';
+    knowledgeTableEmpty.classList.remove('is-hidden');
+  });
+}
+
+for (const navItem of navViewItems) {
+  navItem.addEventListener('click', () => {
+    const targetView = navItem.dataset.view || 'dashboard';
+    activateView(targetView);
+  });
+}
+
+for (const dashboardButton of document.querySelectorAll('[data-view="knowledge"]')) {
+  dashboardButton.addEventListener('click', () => {
+    activateView('knowledge');
+    window.location.hash = 'knowledge';
+  });
+}
+
+window.addEventListener('hashchange', () => {
+  activateView(getViewFromHash());
 });
 
 (async () => {
   try {
-    await refreshMonitoring();
+    activateView(getViewFromHash());
+    await refreshKnowledgeSummary();
     setPageStatus('Admin Active', 'active');
   } catch (error) {
     setPageStatus('Warning: gagal memuat panel admin', 'warning');
