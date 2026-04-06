@@ -28,6 +28,17 @@ _SOCIAL_DIRECT_KEYS = {
     "permisi",
 }
 
+_SOCIAL_DIRECT_ANSWERS = {
+    "__social_greeting__": "Halo, saya siap membantu Anda.",
+    "__social_thanks__": "Sama-sama, saya siap membantu jika masih ada pertanyaan.",
+    "selamat pagi": "Selamat pagi, saya siap membantu Anda.",
+    "selamat siang": "Selamat siang, saya siap membantu Anda.",
+    "selamat sore": "Selamat sore, saya siap membantu Anda.",
+    "selamat malam": "Selamat malam, saya siap membantu Anda.",
+    "apa kabar": "Saya baik, terima kasih. Ada yang bisa saya bantu?",
+    "permisi": "Silakan, saya siap membantu Anda.",
+}
+
 
 def _normalize_social_key(text: str) -> str:
     lowered = text.lower().strip()
@@ -104,6 +115,13 @@ def _should_route_social(message: str) -> bool:
     return normalized in _SOCIAL_DIRECT_KEYS
 
 
+def _get_direct_social_answer(message: str) -> str | None:
+    normalized = _normalize_social_key(message)
+    if not normalized:
+        return None
+    return _SOCIAL_DIRECT_ANSWERS.get(normalized)
+
+
 def _iter_cached_answer_tokens(answer: str):
     words = [word for word in answer.split() if word]
     if not words:
@@ -152,10 +170,19 @@ def _resolve_social_answer(message: str, social_answer: str) -> str:
 
 class ChatService:
     @staticmethod
-    def ask(message: str) -> dict:
+    def ask(message: str, history: list[dict] | None = None) -> dict:
         started_at = time.perf_counter()
         should_route_social = _should_route_social(message)
         if should_route_social:
+            direct_answer = _get_direct_social_answer(message)
+            if direct_answer:
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                _logger.info("chat.ask route=social_direct total_ms=%.1f", elapsed_ms)
+                return {
+                    "answer": direct_answer,
+                    "citations": [],
+                }
+
             cached_answer = _get_cached_social_answer(message)
             if cached_answer:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -176,11 +203,11 @@ class ChatService:
                 }
 
         retrieval_started_at = time.perf_counter()
-        retrieval = retrieve_context(message)
+        retrieval = retrieve_context(message, history=history)
         retrieval_ms = (time.perf_counter() - retrieval_started_at) * 1000
 
         answer_started_at = time.perf_counter()
-        answer = generate_answer(message, retrieval["context"])
+        answer = generate_answer(message, retrieval["context"], history=history)
         answer_ms = (time.perf_counter() - answer_started_at) * 1000
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         _logger.info(
@@ -195,10 +222,22 @@ class ChatService:
         }
 
     @staticmethod
-    def ask_stream(message: str):
+    def ask_stream(message: str, history: list[dict] | None = None):
         started_at = time.perf_counter()
         should_route_social = _should_route_social(message)
         if should_route_social:
+            direct_answer = _get_direct_social_answer(message)
+            if direct_answer:
+                def _direct_social_events():
+                    elapsed_ms = (time.perf_counter() - started_at) * 1000
+                    _logger.info("chat.stream route=social_direct first_token_ms=%.1f", elapsed_ms)
+                    for token in _iter_cached_answer_tokens(direct_answer):
+                        yield json.dumps({"type": "token", "value": token}, ensure_ascii=False) + "\n"
+                    yield json.dumps({"type": "citations", "value": []}, ensure_ascii=False) + "\n"
+                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+
+                return _direct_social_events()
+
             cached_answer = _get_cached_social_answer(message)
             if cached_answer:
                 def _cached_social_events():
@@ -225,13 +264,13 @@ class ChatService:
                 return _social_events()
 
         retrieval_started_at = time.perf_counter()
-        retrieval = retrieve_context(message)
+        retrieval = retrieve_context(message, history=history)
         retrieval_ms = (time.perf_counter() - retrieval_started_at) * 1000
 
         def _events():
             try:
                 first_token_logged = False
-                for token in generate_answer_stream(message, retrieval["context"]):
+                for token in generate_answer_stream(message, retrieval["context"], history=history):
                     if not first_token_logged and token:
                         first_token_ms = (time.perf_counter() - started_at) * 1000
                         _logger.info(

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from api.admin.schemas import DeleteDocumentPayload
 from api.admin.service import AdminAppService
 
 
@@ -36,5 +37,17 @@ def monitoring_status():
 def knowledge_summary():
     try:
         return JSONResponse(AdminAppService.knowledge_summary())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/admin/documents")
+def delete_document(payload: DeleteDocumentPayload):
+    try:
+        return JSONResponse(AdminAppService.delete_document(payload.path))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

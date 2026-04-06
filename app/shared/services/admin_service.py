@@ -22,6 +22,22 @@ class AdminService:
         return settings.knowledge_dir
 
     @staticmethod
+    def _resolve_knowledge_path(relative_path: str, knowledge_dir: Path) -> Path:
+        requested = Path((relative_path or "").strip())
+        if not requested.parts:
+            raise ValueError("Path dokumen tidak valid")
+        if requested.is_absolute():
+            raise ValueError("Path dokumen harus relatif terhadap folder knowledge")
+
+        target_path = (knowledge_dir / requested).resolve()
+        try:
+            target_path.relative_to(knowledge_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("Path dokumen berada di luar folder knowledge") from exc
+
+        return target_path
+
+    @staticmethod
     def save_uploaded_documents(files: list[UploadFile]) -> dict:
         target_dir = AdminService._ensure_knowledge_dir()
         uploaded: list[str] = []
@@ -48,6 +64,48 @@ class AdminService:
             "uploaded_count": len(uploaded),
             "skipped": skipped,
             "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
+        }
+
+    @staticmethod
+    def delete_document(relative_path: str) -> dict:
+        knowledge_dir = AdminService._ensure_knowledge_dir()
+        target_path = AdminService._resolve_knowledge_path(relative_path, knowledge_dir)
+
+        if not target_path.exists() or not target_path.is_file():
+            raise FileNotFoundError("Dokumen tidak ditemukan")
+
+        if target_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise ValueError("Format dokumen tidak didukung untuk dihapus")
+
+        indexed_chunk_count = 0
+        chunk_ids: list[str] = []
+
+        try:
+            collection = get_collection()
+            payload = collection.get(where={"path": str(target_path)}, include=[])
+            chunk_ids = payload.get("ids", []) or []
+        except Exception:
+            chunk_ids = []
+
+        target_path.unlink()
+
+        cleanup_error: Exception | None = None
+        if chunk_ids:
+            try:
+                collection = get_collection()
+                collection.delete(ids=chunk_ids)
+                indexed_chunk_count = len(chunk_ids)
+            except Exception as exc:
+                cleanup_error = exc
+
+        if cleanup_error is not None:
+            raise RuntimeError(
+                "Dokumen berhasil dihapus dari folder knowledge, tetapi cleanup index gagal. Jalankan reindex."
+            ) from cleanup_error
+
+        return {
+            "deleted": str(target_path.relative_to(knowledge_dir)),
+            "removed_chunks": indexed_chunk_count,
         }
 
     @staticmethod
@@ -193,11 +251,27 @@ class AdminService:
             readiness = "active"
             readiness_label = "Knowledge siap"
 
+        document_rows = []
+        for document_path in documents:
+            relative_path = str(document_path.relative_to(knowledge_dir))
+            is_indexed = relative_path in indexed_known_sources
+            document_rows.append(
+                {
+                    "path": relative_path,
+                    "document": relative_path,
+                    "chunks": chunk_by_source.get(relative_path) if is_indexed else None,
+                    "status": "indexed" if is_indexed else "pending",
+                    "updated_at": datetime.fromtimestamp(document_path.stat().st_mtime, UTC).isoformat(),
+                }
+            )
+
+        document_rows.sort(key=lambda item: (item["status"] != "indexed", item["document"].lower()))
+
         top_sources = sorted(
             [
-                {"source": source, "chunks": count}
-                for source, count in chunk_by_source.items()
-                if source in source_set
+                {"source": row["document"], "chunks": row["chunks"]}
+                for row in document_rows
+                if row["status"] == "indexed" and row["chunks"] is not None
             ],
             key=lambda item: item["chunks"],
             reverse=True,
@@ -213,6 +287,7 @@ class AdminService:
             "chunks_total": chunks_total,
             "unindexed_sources": unindexed_sources[:8],
             "top_sources": top_sources,
+            "documents": document_rows,
             "index_status": index_status,
             "index_detail": index_detail,
             "checked_at": datetime.now(UTC).isoformat(),

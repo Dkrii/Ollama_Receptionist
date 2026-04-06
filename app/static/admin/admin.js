@@ -53,6 +53,18 @@ function updateSelectedFilesInfo() {
   selectedFileInfo.textContent = `Dipilih: ${names.join(', ')}${suffix}`;
 }
 
+function openDocumentPicker() {
+  if (!docFiles) return;
+
+  // Prefer the native picker API when available; fallback to synthetic click.
+  if (typeof docFiles.showPicker === 'function') {
+    docFiles.showPicker();
+    return;
+  }
+
+  docFiles.click();
+}
+
 function activateView(viewName) {
   for (const item of navViewItems) {
     item.classList.toggle('is-active', item.dataset.view === viewName);
@@ -174,40 +186,45 @@ function renderKnowledgeHealth(summaryData) {
 
 function renderKnowledgeTable(summaryData) {
   if (!knowledgeTableBody || !knowledgeTableEmpty) return;
-
-  const checkedAt = summaryData.checked_at
-    ? new Date(summaryData.checked_at).toLocaleString('id-ID')
-    : '-';
-
-  const indexedRows = (summaryData.top_sources || []).map((source) => ({
-    document: source.source,
-    status: 'indexed',
-    chunks: source.chunks,
-    updatedAt: checkedAt
-  }));
-
-  const pendingRows = (summaryData.unindexed_sources || []).map((source) => ({
-    document: source,
-    status: 'pending',
-    chunks: '-',
-    updatedAt: checkedAt
-  }));
-
-  const tableRows = [...indexedRows, ...pendingRows];
+  const tableRows = summaryData.documents || [];
   knowledgeTableBody.innerHTML = '';
 
   for (const rowData of tableRows) {
     const row = document.createElement('tr');
-    row.innerHTML = `
-      <td>${rowData.document}</td>
-      <td>${rowData.chunks}</td>
-      <td>
-        <span class="vr-knowledge-status vr-knowledge-status--${rowData.status}">
-          ${rowData.status === 'indexed' ? 'Indexed' : 'Pending'}
-        </span>
-      </td>
-      <td>${rowData.updatedAt}</td>
-    `;
+    const documentCell = document.createElement('td');
+    documentCell.textContent = rowData.document || '-';
+
+    const chunksCell = document.createElement('td');
+    chunksCell.textContent = rowData.chunks ?? '-';
+
+    const statusCell = document.createElement('td');
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `vr-knowledge-status vr-knowledge-status--${rowData.status}`;
+    statusBadge.textContent = rowData.status === 'indexed' ? 'Indexed' : 'Pending';
+    statusCell.appendChild(statusBadge);
+
+    const updatedCell = document.createElement('td');
+    updatedCell.textContent = rowData.updated_at
+      ? new Date(rowData.updated_at).toLocaleString('id-ID')
+      : '-';
+
+    const actionCell = document.createElement('td');
+    const actionWrap = document.createElement('div');
+    actionWrap.className = 'vr-knowledge-actions';
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'vr-knowledge-delete';
+    deleteButton.dataset.path = rowData.path || rowData.document || '';
+    deleteButton.textContent = 'Delete';
+    actionWrap.appendChild(deleteButton);
+    actionCell.appendChild(actionWrap);
+
+    row.appendChild(documentCell);
+    row.appendChild(chunksCell);
+    row.appendChild(statusCell);
+    row.appendChild(updatedCell);
+    row.appendChild(actionCell);
     knowledgeTableBody.appendChild(row);
   }
 
@@ -231,6 +248,26 @@ async function refreshKnowledgeSummary() {
   if (!response.ok) throw new Error('Gagal memuat ringkasan knowledge');
   const data = await response.json();
   renderKnowledgeSummary(data);
+}
+
+async function deleteKnowledgeDocument(path) {
+  const response = await fetch('/api/admin/documents', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path })
+  });
+
+  if (!response.ok) {
+    let detail = 'Gagal menghapus dokumen';
+    try {
+      const errorData = await response.json();
+      detail = errorData.detail || detail;
+    } catch (error) {
+    }
+    throw new Error(detail);
+  }
+
+  return response.json();
 }
 
 async function triggerReindex() {
@@ -268,7 +305,7 @@ refreshStatusBtn.addEventListener('click', async () => {
 });
 
 if (selectFilesBtn && docFiles) {
-  selectFilesBtn.addEventListener('click', () => docFiles.click());
+  selectFilesBtn.addEventListener('click', openDocumentPicker);
 }
 
 if (docFiles) {
@@ -308,6 +345,34 @@ if (clearKnowledgeHistoryBtn && knowledgeTableBody && knowledgeTableEmpty) {
   clearKnowledgeHistoryBtn.addEventListener('click', () => {
     knowledgeTableBody.innerHTML = '';
     knowledgeTableEmpty.classList.remove('is-hidden');
+  });
+}
+
+if (knowledgeTableBody) {
+  knowledgeTableBody.addEventListener('click', async (event) => {
+    const targetButton = event.target.closest('.vr-knowledge-delete');
+    if (!targetButton) return;
+
+    const documentPath = targetButton.dataset.path;
+    if (!documentPath) return;
+
+    const confirmed = window.confirm(`Hapus dokumen "${documentPath}" dari knowledge base?`);
+    if (!confirmed) return;
+
+    const originalText = targetButton.textContent;
+    targetButton.disabled = true;
+    targetButton.textContent = 'Deleting...';
+
+    try {
+      const result = await deleteKnowledgeDocument(documentPath);
+      await refreshKnowledgeSummary();
+      setPageStatus(`Dokumen dihapus: ${result.deleted}`, 'active');
+    } catch (error) {
+      setPageStatus(error.message || 'Warning: gagal menghapus dokumen', 'warning');
+    } finally {
+      targetButton.disabled = false;
+      targetButton.textContent = originalText;
+    }
   });
 }
 

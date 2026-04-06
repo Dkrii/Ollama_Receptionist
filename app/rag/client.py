@@ -29,7 +29,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     for text in texts:
         response = _http_session.post(
             f"{settings.ollama_base_url}/api/embeddings",
-            json={"model": settings.ollama_embed_model, "prompt": text},
+            json={
+                "model": settings.ollama_embed_model,
+                "prompt": text,
+                "keep_alive": "30m",
+            },
             timeout=90,
         )
         response.raise_for_status()

@@ -513,6 +513,33 @@ body.vr-admin-page {
   font-weight: 600;
 }
 
+.vr-knowledge-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.vr-knowledge-delete {
+  border: 1px solid #f1c7cb;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: #fff3f4;
+  color: #a32832;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.vr-knowledge-delete:hover:not(:disabled) {
+  background: #ffe5e7;
+  border-color: #e79aa2;
+}
+
+.vr-knowledge-delete:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .vr-knowledge-list__empty.is-hidden {
   display: none;
 }

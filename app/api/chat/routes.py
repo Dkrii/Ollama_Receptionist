@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 def chat(payload: ChatRequest):
     if not payload.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    return ChatAppService.ask(payload.message)
+    return ChatAppService.ask(payload.message, history=[item.model_dump() for item in payload.history])
 
 
 @router.post("/chat/stream")
@@ -20,6 +20,6 @@ def chat_stream(payload: ChatRequest):
     if not payload.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     return StreamingResponse(
-        ChatAppService.ask_stream(payload.message),
+        ChatAppService.ask_stream(payload.message, history=[item.model_dump() for item in payload.history]),
         media_type="application/x-ndjson",
     )

@@ -19,3 +19,7 @@ class AdminAppService:
     @staticmethod
     def knowledge_summary() -> dict:
         return AdminService.get_knowledge_summary()
+
+    @staticmethod
+    def delete_document(path: str) -> dict:
+        return AdminService.delete_document(path)

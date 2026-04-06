@@ -123,6 +123,20 @@ let isSending = false;
 let speechQueue = [];
 let isSpeakingQueue = false;
 let speechResidualBuffer = '';
+let conversationHistory = [];
+
+function buildRequestHistory() {
+  return conversationHistory.slice(-6);
+}
+
+function appendConversationTurn(role, content) {
+  const text = (content || '').trim();
+  if (!text) return;
+  conversationHistory.push({ role, content: text });
+  if (conversationHistory.length > 12) {
+    conversationHistory = conversationHistory.slice(-12);
+  }
+}
 
 function setThinkingStatus(text = '') {
   if (!systemStatus) return;
@@ -252,7 +266,7 @@ async function sendMessage(message) {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, history: buildRequestHistory() })
     });
 
     if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
@@ -310,6 +324,8 @@ async function sendMessage(message) {
     } else {
       flushSpeechRemainder();
     }
+    appendConversationTurn('user', message);
+    appendConversationTurn('assistant', finalAnswer);
   } catch (err) {
     const fallback = 'Terjadi kesalahan sistem, mohon coba lagi.';
     setSubtitle(fallback, 'error');

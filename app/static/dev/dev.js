@@ -1,84 +1,352 @@
+const kioskRoot = document.getElementById('kioskRoot');
 const chatBox = document.getElementById('chatBox');
 const input = document.getElementById('messageInput');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
+const micWrapper = document.getElementById('micWrapper');
+const avatarEl = document.getElementById('kioskAvatar');
 const debugStatsEl = document.getElementById('debugStats');
 
+const AVATAR_STATES = ['IDLE', 'LISTENING', 'THINGKING', 'TALKING'];
+const avatarCache = new Map();
+
+let currentAvatarState = 'IDLE';
 let isSending = false;
 let speechQueue = [];
 let isSpeakingQueue = false;
 let speechResidualBuffer = '';
+let conversationHistory = [];
+let micRecognition = null;
+let hasConversationStarted = false;
+let conversationResetTimer = null;
 
-function addBubble(text, role) {
-  const row = document.createElement('div');
-  row.className = `vr-chat__row vr-chat__row--${role}`;
+function buildRequestHistory() {
+  return conversationHistory.slice(-6);
+}
 
-  const bubble = document.createElement('div');
-  bubble.className = `bubble ${role} vr-chat__bubble vr-chat__bubble--${role}`;
-  bubble.textContent = text;
+function appendConversationTurn(role, content) {
+  const text = (content || '').trim();
+  if (!text) return;
 
-  row.appendChild(bubble);
-  chatBox.appendChild(row);
+  conversationHistory.push({ role, content: text });
+  if (conversationHistory.length > 12) {
+    conversationHistory = conversationHistory.slice(-12);
+  }
+}
+
+function getAvatarPath(state) {
+  return `/static/kiosk/models/${state}.png`;
+}
+
+function colorDistance(r1, g1, b1, r2, g2, b2) {
+  const dr = r1 - r2;
+  const dg = g1 - g2;
+  const db = b1 - b2;
+  return Math.sqrt((dr * dr) + (dg * dg) + (db * db));
+}
+
+function getBorderPalette(data, width, height) {
+  const bucketSize = 16;
+  const buckets = new Map();
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 128));
+
+  const addSample = (x, y) => {
+    const index = (y * width + x) * 4;
+    const r = data[index];
+    const g = data[index + 1];
+    const b = data[index + 2];
+    const a = data[index + 3];
+    if (a < 200) return;
+
+    const key = [
+      Math.round(r / bucketSize) * bucketSize,
+      Math.round(g / bucketSize) * bucketSize,
+      Math.round(b / bucketSize) * bucketSize
+    ].join(',');
+
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.r += r;
+      existing.g += g;
+      existing.b += b;
+      existing.count += 1;
+    } else {
+      buckets.set(key, { r, g, b, count: 1 });
+    }
+  };
+
+  for (let x = 0; x < width; x += step) {
+    addSample(x, 0);
+    addSample(x, height - 1);
+  }
+
+  for (let y = 0; y < height; y += step) {
+    addSample(0, y);
+    addSample(width - 1, y);
+  }
+
+  return [...buckets.values()]
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 6)
+    .map((entry) => ({
+      r: entry.r / entry.count,
+      g: entry.g / entry.count,
+      b: entry.b / entry.count
+    }));
+}
+
+function isLikelyBackgroundPixel(data, index, palette) {
+  const r = data[index];
+  const g = data[index + 1];
+  const b = data[index + 2];
+  const a = data[index + 3];
+
+  if (a < 18) return true;
+
+  const maxChannel = Math.max(r, g, b);
+  const minChannel = Math.min(r, g, b);
+  const brightness = (r + g + b) / 3;
+  const saturation = maxChannel - minChannel;
+  const nearNeutral = saturation < 36;
+
+  if (brightness > 238 && saturation < 24) {
+    return true;
+  }
+
+  let nearestDistance = Infinity;
+  for (const color of palette) {
+    nearestDistance = Math.min(nearestDistance, colorDistance(r, g, b, color.r, color.g, color.b));
+  }
+
+  return nearNeutral && nearestDistance < 42;
+}
+
+function removeConnectedBackdrop(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, 0);
+
+  const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data, width, height } = frame;
+  const palette = getBorderPalette(data, width, height);
+  const visited = new Uint8Array(width * height);
+  const queue = new Uint32Array(width * height);
+  let queueStart = 0;
+  let queueEnd = 0;
+
+  const enqueueIfBackground = (x, y) => {
+    const offset = y * width + x;
+    if (visited[offset]) return;
+    visited[offset] = 1;
+
+    const index = offset * 4;
+    if (!isLikelyBackgroundPixel(data, index, palette)) {
+      return;
+    }
+
+    queue[queueEnd++] = offset;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueueIfBackground(x, 0);
+    enqueueIfBackground(x, height - 1);
+  }
+
+  for (let y = 1; y < height - 1; y += 1) {
+    enqueueIfBackground(0, y);
+    enqueueIfBackground(width - 1, y);
+  }
+
+  while (queueStart < queueEnd) {
+    const offset = queue[queueStart++];
+    const index = offset * 4;
+    data[index + 3] = 0;
+
+    const x = offset % width;
+    const y = Math.floor(offset / width);
+
+    if (x > 0) enqueueIfBackground(x - 1, y);
+    if (x + 1 < width) enqueueIfBackground(x + 1, y);
+    if (y > 0) enqueueIfBackground(x, y - 1);
+    if (y + 1 < height) enqueueIfBackground(x, y + 1);
+  }
+
+  context.putImageData(frame, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function preloadAvatarStates() {
+  await Promise.all(
+    AVATAR_STATES.map(async (state) => {
+      const source = getAvatarPath(state);
+      try {
+        const image = await loadImage(source);
+        avatarCache.set(state, removeConnectedBackdrop(image));
+      } catch (error) {
+        avatarCache.set(state, source);
+      }
+    })
+  );
+
+  setAvatarState(currentAvatarState);
+}
+
+function setAvatarState(state) {
+  currentAvatarState = state;
+
+  if (!avatarEl) return;
+
+  const source = avatarCache.get(state) || getAvatarPath(state);
+  if (avatarEl.src !== source) {
+    avatarEl.src = source;
+  }
+  avatarEl.dataset.state = state;
+}
+
+function updateAvatarState() {
+  const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
+
+  if (micWrapper && micWrapper.classList.contains('is-recording')) {
+    setAvatarState('LISTENING');
+  } else if (isSpeaking) {
+    setAvatarState('TALKING');
+  } else if (isSending) {
+    setAvatarState('THINGKING');
+  } else {
+    setAvatarState('IDLE');
+  }
+}
+
+function scrollChatToBottom() {
+  if (!chatBox) return;
   chatBox.scrollTop = chatBox.scrollHeight;
-  return bubble;
+}
+
+function clearChat() {
+  if (!chatBox) return;
+  chatBox.innerHTML = '';
+}
+
+function resetConversationLayout() {
+  hasConversationStarted = false;
+  if (kioskRoot) {
+    kioskRoot.classList.remove('has-conversation');
+  }
+  clearChat();
+}
+
+function isSpeechActive() {
+  return Boolean(isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking));
+}
+
+function finalizeConversationLayout() {
+  if (!isSending && !isSpeechActive() && !micRecognition) {
+    resetConversationLayout();
+  }
+}
+
+function scheduleConversationReset(delay = 80) {
+  clearTimeout(conversationResetTimer);
+  conversationResetTimer = setTimeout(() => {
+    finalizeConversationLayout();
+  }, delay);
+}
+
+function activateConversationLayout() {
+  clearTimeout(conversationResetTimer);
+  if (hasConversationStarted) return;
+  hasConversationStarted = true;
+  if (kioskRoot) {
+    kioskRoot.classList.add('has-conversation');
+  }
 }
 
 function addBotBubble() {
-  const row = document.createElement('div');
-  row.className = 'vr-chat__row vr-chat__row--bot';
-
   const bubble = document.createElement('div');
-  bubble.className = 'bubble bot vr-chat__bubble vr-chat__bubble--bot';
-
-  row.appendChild(bubble);
-  chatBox.appendChild(row);
-  chatBox.scrollTop = chatBox.scrollHeight;
+  bubble.className = 'chat-bubble chat-bubble--bot';
+  chatBox.appendChild(bubble);
+  scrollChatToBottom();
   return bubble;
 }
 
-function addThinkingBubble() {
-  const row = document.createElement('div');
-  row.className = 'vr-chat__row vr-chat__row--bot';
+function renderDebugStats(stats = null) {
+  if (!debugStatsEl) return;
 
-  const bubble = document.createElement('div');
-  bubble.className = 'bubble bot vr-chat__bubble vr-chat__bubble--bot vr-chat__bubble--thinking';
-  bubble.setAttribute('aria-label', 'Bot sedang menyiapkan jawaban');
-  bubble.innerHTML = `
-    <span class="vr-chat__typing" aria-hidden="true">
-      <span class="vr-chat__dot"></span>
-      <span class="vr-chat__dot"></span>
-      <span class="vr-chat__dot"></span>
-    </span>
-  `;
+  debugStatsEl.innerHTML = '';
+  if (!stats) return;
 
-  row.appendChild(bubble);
-  chatBox.appendChild(row);
-  chatBox.scrollTop = chatBox.scrollHeight;
-  return row;
+  const items = [
+    `Waktu Mulai (TTFT): ${(stats.ttft / 1000).toFixed(2)} detik`,
+    `Total Waktu: ${(stats.totalTime / 1000).toFixed(2)} detik`,
+    `Hitungan Karakter: ${stats.charCount}`,
+    `Kecepatan: ${stats.charsPerSec} char/detik`
+  ];
+
+  items.forEach((text) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    debugStatsEl.appendChild(li);
+  });
+}
+
+function syncComposerState() {
+  const hasMessage = Boolean(input && input.value.trim());
+
+  if (sendBtn) {
+    sendBtn.disabled = isSending || !hasMessage;
+  }
+
+  updateMicState();
 }
 
 function updateMicState() {
   const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
+
   if (micBtn) {
     micBtn.disabled = isSending || isSpeaking;
   }
+
+  updateAvatarState();
 }
 
 function setComposerBusy(busy) {
   isSending = busy;
-  sendBtn.disabled = busy;
-  input.disabled = busy;
-  updateMicState();
+
+  if (input) {
+    input.disabled = busy;
+  }
+
+  syncComposerState();
 }
 
 function speakText(text) {
   if (!text || !window.speechSynthesis) return;
+
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'id-ID';
   utter.onstart = updateMicState;
-  utter.onend = updateMicState;
-  utter.onerror = updateMicState;
+  utter.onend = () => {
+    updateMicState();
+    scheduleConversationReset(40);
+  };
+  utter.onerror = () => {
+    updateMicState();
+    scheduleConversationReset(40);
+  };
   window.speechSynthesis.speak(utter);
   updateMicState();
 }
@@ -87,9 +355,11 @@ function resetSpeechQueue() {
   speechQueue = [];
   isSpeakingQueue = false;
   speechResidualBuffer = '';
+
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
+
   updateMicState();
 }
 
@@ -115,9 +385,11 @@ function enqueueSpeechChunk(text) {
 function flushSpeechRemainder() {
   const tail = speechResidualBuffer.trim();
   speechResidualBuffer = '';
+
   if (tail) {
     speechQueue.push(tail);
   }
+
   if (!isSpeakingQueue) {
     drainSpeechQueue();
   }
@@ -128,12 +400,14 @@ function drainSpeechQueue() {
   if (!speechQueue.length) {
     isSpeakingQueue = false;
     updateMicState();
+    scheduleConversationReset(40);
     return;
   }
   if (isSpeakingQueue) return;
 
   isSpeakingQueue = true;
   updateMicState();
+
   const next = speechQueue.shift();
   const utter = new SpeechSynthesisUtterance(next);
   utter.lang = 'id-ID';
@@ -151,67 +425,55 @@ function drainSpeechQueue() {
 }
 
 async function renderBotMessageWordByWord(message) {
+  activateConversationLayout();
   const bubble = addBotBubble();
   bubble.textContent = message;
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-function renderDebugStats(stats = null) {
-  debugStatsEl.innerHTML = '';
-
-  if (!stats) {
-    const li = document.createElement('li');
-    li.textContent = 'Menunggu metrik AI...';
-    debugStatsEl.appendChild(li);
-    return;
-  }
-
-  const items = [
-    `Waktu Mulai (TTFT): ${(stats.ttft / 1000).toFixed(2)} detik`,
-    `Total Waktu: ${(stats.totalTime / 1000).toFixed(2)} detik`,
-    `Hitungan Karakter: ${stats.charCount}`,
-    `Kecepatan: ${stats.charsPerSec} char/detik`
-  ];
-
-  items.forEach(text => {
-    const li = document.createElement('li');
-    li.textContent = text;
-    debugStatsEl.appendChild(li);
-  });
+  scrollChatToBottom();
+  scheduleConversationReset(40);
 }
 
 async function sendMessageNonStream(message, thinkingNode = null) {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message, history: buildRequestHistory() })
   });
 
   if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
 
   const data = await response.json();
   const answer = data.answer || 'Terjadi kesalahan saat memproses pertanyaan.';
+  activateConversationLayout();
+  clearChat();
   const botBubble = addBotBubble();
   botBubble.textContent = answer;
+
   if (thinkingNode && thinkingNode.isConnected) {
     thinkingNode.remove();
   }
-  chatBox.scrollTop = chatBox.scrollHeight;
+
+  appendConversationTurn('user', message);
+  appendConversationTurn('assistant', answer);
+  scrollChatToBottom();
   speakText(answer);
+  if (!window.speechSynthesis) {
+    scheduleConversationReset(40);
+  }
   renderDebugStats(null);
 }
 
 async function sendMessage() {
-  if (isSending) return;
+  if (isSending || !input) return;
 
   const message = input.value.trim();
   if (!message) return;
 
-  addBubble(message, 'user');
+  clearChat();
   input.value = '';
   setComposerBusy(true);
   resetSpeechQueue();
-  const thinkingNode = addThinkingBubble();
+
+  const thinkingNode = null;
   let streamStarted = false;
   let botBubble = null;
   let finalAnswer = '';
@@ -225,7 +487,7 @@ async function sendMessage() {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, history: buildRequestHistory() })
     });
 
     if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
@@ -257,28 +519,31 @@ async function sendMessage() {
         } catch (parseError) {
           continue;
         }
+
         if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
 
           if (finalAnswer.trim()) {
             if (!botBubble) {
+              activateConversationLayout();
               botBubble = addBotBubble();
               firstTokenTime = performance.now();
               const ttft = firstTokenTime - startTime;
               renderDebugStats({
-                ttft: ttft,
+                ttft,
                 totalTime: ttft,
                 charCount: finalAnswer.length,
-                charsPerSec: (ttft > 0 ? (finalAnswer.length / (ttft / 1000)).toFixed(1) : 0)
+                charsPerSec: ttft > 0 ? (finalAnswer.length / (ttft / 1000)).toFixed(1) : 0
               });
 
-              if (thinkingNode.isConnected) {
+              if (thinkingNode && thinkingNode.isConnected) {
                 thinkingNode.remove();
               }
             }
+
             botBubble.textContent = finalAnswer;
-            chatBox.scrollTop = chatBox.scrollHeight;
+            scrollChatToBottom();
             enqueueSpeechChunk(token);
           }
         } else if (event.type === 'citations') {
@@ -303,8 +568,8 @@ async function sendMessage() {
     const totalTime = endTime - startTime;
     const ttft = firstTokenTime ? (firstTokenTime - startTime) : totalTime;
     renderDebugStats({
-      ttft: ttft,
-      totalTime: totalTime,
+      ttft,
+      totalTime,
       charCount: finalAnswer.length,
       charsPerSec: totalTime > 0 ? (finalAnswer.length / (totalTime / 1000)).toFixed(1) : 0
     });
@@ -315,22 +580,31 @@ async function sendMessage() {
         botBubble = addBotBubble();
       }
       botBubble.textContent = finalAnswer;
-      if (thinkingNode.isConnected) {
+      if (thinkingNode && thinkingNode.isConnected) {
         thinkingNode.remove();
       }
       speakText(finalAnswer);
+      if (!window.speechSynthesis) {
+        scheduleConversationReset(40);
+      }
     } else {
-      if (thinkingNode.isConnected) {
+      if (thinkingNode && thinkingNode.isConnected) {
         thinkingNode.remove();
       }
       flushSpeechRemainder();
+      if (!window.speechSynthesis) {
+        scheduleConversationReset(40);
+      }
     }
-  } catch (err) {
+
+    appendConversationTurn('user', message);
+    appendConversationTurn('assistant', finalAnswer);
+  } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());
     const fallbackMessage = 'Terjadi kesalahan saat memproses pertanyaan.';
 
     if (hasPartialAnswer) {
-      if (thinkingNode.isConnected) {
+      if (thinkingNode && thinkingNode.isConnected) {
         thinkingNode.remove();
       }
       flushSpeechRemainder();
@@ -346,35 +620,32 @@ async function sendMessage() {
     }
 
     resetSpeechQueue();
-    if (thinkingNode.isConnected) {
+
+    if (thinkingNode && thinkingNode.isConnected) {
+      clearChat();
       const fallbackBubble = addBotBubble();
       fallbackBubble.textContent = fallbackMessage;
       thinkingNode.remove();
-      chatBox.scrollTop = chatBox.scrollHeight;
+      scrollChatToBottom();
     } else {
       renderBotMessageWordByWord(fallbackMessage);
     }
+
     speakText(fallbackMessage);
+    if (!window.speechSynthesis) {
+      scheduleConversationReset(40);
+    }
   } finally {
     setComposerBusy(false);
+    syncComposerState();
     input.focus();
   }
 }
 
-sendBtn.addEventListener('click', sendMessage);
-
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-});
-
-let micRecognition = null;
-
 function setupSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return null;
+
   const recognition = new SpeechRecognition();
   recognition.lang = 'id-ID';
   recognition.interimResults = false;
@@ -382,8 +653,26 @@ function setupSpeechRecognition() {
   return recognition;
 }
 
+function cleanupRecording() {
+  if (micWrapper) {
+    micWrapper.classList.remove('is-recording');
+  }
+
+  if (micBtn) {
+    micBtn.classList.remove('is-recording');
+  }
+
+  if (input) {
+    input.placeholder = 'Tulis pesan Anda...';
+  }
+
+  micRecognition = null;
+  updateAvatarState();
+}
+
 function startRecording() {
   if (isSending || micRecognition) return;
+
   micRecognition = setupSpeechRecognition();
   if (!micRecognition) {
     alert('Speech recognition belum didukung browser ini.');
@@ -393,6 +682,7 @@ function startRecording() {
   micRecognition.onresult = (event) => {
     if (event.results && event.results[0] && event.results[0][0]) {
       input.value = event.results[0][0].transcript;
+      syncComposerState();
       sendMessage();
     }
   };
@@ -407,42 +697,71 @@ function startRecording() {
 
   try {
     micRecognition.start();
-    micBtn.classList.add('is-recording');
-    input.placeholder = "Mendengarkan... Lepas untuk mengirim";
-  } catch (err) {
+
+    if (micWrapper) {
+      micWrapper.classList.add('is-recording');
+    }
+
+    if (micBtn) {
+      micBtn.classList.add('is-recording');
+    }
+
+    if (input) {
+      input.placeholder = 'Mendengarkan... Lepas untuk mengirim';
+    }
+
+    updateAvatarState();
+  } catch (error) {
     cleanupRecording();
   }
 }
 
 function stopRecording() {
   if (!micRecognition) return;
+
   try {
     micRecognition.stop();
-  } catch (err) {}
+  } catch (error) {
+  }
+
   cleanupRecording();
 }
 
-function cleanupRecording() {
-  micBtn.classList.remove('is-recording');
-  input.placeholder = "Contoh: Jam operasional kantor?";
-  micRecognition = null;
-}
+sendBtn.addEventListener('click', sendMessage);
+
+input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
+});
+
+input.addEventListener('input', syncComposerState);
 
 micBtn.addEventListener('mousedown', startRecording);
-micBtn.addEventListener('touchstart', (e) => {
-  e.preventDefault(); // Prevent firing mousedown afterwards
+micBtn.addEventListener('touchstart', (event) => {
+  event.preventDefault();
   startRecording();
 });
 
-// Use passive: false where needed or let default window handle it, but preventDefault above is typically enough
 window.addEventListener('mouseup', () => {
   if (micRecognition) stopRecording();
 });
-micBtn.addEventListener('touchend', (e) => {
-  e.preventDefault();
+
+micBtn.addEventListener('touchend', (event) => {
+  event.preventDefault();
   stopRecording();
 });
-micBtn.addEventListener('touchcancel', (e) => {
-  e.preventDefault();
+
+micBtn.addEventListener('touchcancel', (event) => {
+  event.preventDefault();
   stopRecording();
 });
+
+if (window.speechSynthesis && typeof window.speechSynthesis.addEventListener === 'function') {
+  window.speechSynthesis.addEventListener('voiceschanged', updateMicState);
+}
+
+syncComposerState();
+updateAvatarState();
+preloadAvatarStates();

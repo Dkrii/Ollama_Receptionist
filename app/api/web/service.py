@@ -1,7 +1,7 @@
 class WebPageService:
     @staticmethod
     def dev_template() -> str:
-        return "home/index.html"
+        return "dev/index.html"
 
     @staticmethod
     def home_template() -> str:
