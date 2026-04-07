@@ -1,0 +1,56 @@
+<section class="vr-admin-view is-hidden" id="adminViewEmployees" data-view="employees">
+  <section class="vr-admin-pagehead">
+    <h2>Data Karyawan</h2>
+    <p>Kelola data dasar karyawan untuk kebutuhan sapaan kiosk.</p>
+  </section>
+
+  <section class="vr-admin-card vr-employee-card">
+    <div class="vr-admin-card__accent"></div>
+
+    <form id="employeeForm" class="vr-employee-form" aria-label="Form data karyawan">
+      <div class="vr-employee-grid">
+        <label class="vr-employee-field">
+          <span>Nama</span>
+          <input id="employeeNama" type="text" name="nama" placeholder="Masukkan nama karyawan" required />
+        </label>
+
+        <label class="vr-employee-field">
+          <span>Departemen</span>
+          <input id="employeeDepartemen" type="text" name="departemen" placeholder="Masukkan departemen" required />
+        </label>
+
+        <label class="vr-employee-field">
+          <span>Jabatan</span>
+          <input id="employeeJabatan" type="text" name="jabatan" placeholder="Masukkan jabatan" required />
+        </label>
+
+        <label class="vr-employee-field">
+          <span>Nomor WA</span>
+          <input id="employeeNomorWa" type="text" name="nomor_wa" placeholder="Masukkan nomor WA" required />
+        </label>
+      </div>
+
+      <div class="vr-admin-actions">
+        <button id="employeeSaveBtn" class="vr-button vr-button--primary" type="submit">Simpan</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="vr-admin-card vr-employee-table-card">
+    <div class="vr-knowledge-table-wrap">
+      <table class="vr-knowledge-table" aria-label="Data karyawan">
+        <thead>
+          <tr>
+            <th>Nama</th>
+            <th>Departemen</th>
+            <th>Jabatan</th>
+            <th>Nomor WA</th>
+          </tr>
+        </thead>
+        <tbody id="employeeTableBody"></tbody>
+      </table>
+    </div>
+
+    <p id="employeeTableEmpty" class="vr-knowledge-list__empty">Belum ada data karyawan untuk ditampilkan.</p>
+  </section>
+</section>

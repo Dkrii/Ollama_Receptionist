@@ -118,12 +118,63 @@ const subtitlesBox = document.getElementById('subtitlesBox');
 const micBtn = document.getElementById('micBtn');
 const micHint = document.getElementById('micHint');
 const systemStatus = document.getElementById('systemStatus');
+const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
+const CONVERSATION_ACTIVITY_STORAGE_KEY = 'kioskConversationLastActivity';
+const SESSION_IDLE_MS = 5 * 60 * 1000;
 
 let isSending = false;
 let speechQueue = [];
 let isSpeakingQueue = false;
 let speechResidualBuffer = '';
 let conversationHistory = [];
+let sessionIdleTimer = null;
+let activeConversationId = '';
+
+function isStorageAvailable() {
+  return typeof window.sessionStorage !== 'undefined';
+}
+
+function readStoredConversationId() {
+  if (!isStorageAvailable()) return '';
+  return window.sessionStorage.getItem(CONVERSATION_ID_STORAGE_KEY) || '';
+}
+
+function readStoredActivityAt() {
+  if (!isStorageAvailable()) return 0;
+  return Number(window.sessionStorage.getItem(CONVERSATION_ACTIVITY_STORAGE_KEY) || 0);
+}
+
+function storeActivityNow() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.setItem(CONVERSATION_ACTIVITY_STORAGE_KEY, String(Date.now()));
+}
+
+function clearStoredConversationState() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.removeItem(CONVERSATION_ID_STORAGE_KEY);
+  window.sessionStorage.removeItem(CONVERSATION_ACTIVITY_STORAGE_KEY);
+}
+
+function setActiveConversationId(value) {
+  activeConversationId = (value || '').trim();
+
+  if (!isStorageAvailable()) return;
+
+  if (activeConversationId) {
+    window.sessionStorage.setItem(CONVERSATION_ID_STORAGE_KEY, activeConversationId);
+    storeActivityNow();
+    return;
+  }
+
+  clearStoredConversationState();
+}
+
+function shouldResetStoredConversation() {
+  const storedConversationId = readStoredConversationId();
+  const lastActivityAt = readStoredActivityAt();
+  if (!storedConversationId || !lastActivityAt) return false;
+  return (Date.now() - lastActivityAt) >= SESSION_IDLE_MS;
+}
 
 function buildRequestHistory() {
   return conversationHistory.slice(-6);
@@ -135,6 +186,41 @@ function appendConversationTurn(role, content) {
   conversationHistory.push({ role, content: text });
   if (conversationHistory.length > 12) {
     conversationHistory = conversationHistory.slice(-12);
+  }
+  storeActivityNow();
+}
+
+function clearConversationState() {
+  clearTimeout(sessionIdleTimer);
+  conversationHistory = [];
+  clearStoredConversationState();
+  activeConversationId = '';
+}
+
+function scheduleSessionIdleReset() {
+  clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = setTimeout(() => {
+    clearConversationState();
+    setThinkingStatus();
+    if (subtitlesBox) {
+      subtitlesBox.innerHTML = '';
+    }
+    const glassPanel = document.getElementById('glassPanel');
+    if (glassPanel) {
+      glassPanel.classList.remove('is-expanded');
+    }
+  }, SESSION_IDLE_MS);
+}
+
+function hydrateConversationState() {
+  if (shouldResetStoredConversation()) {
+    clearStoredConversationState();
+    return;
+  }
+
+  activeConversationId = readStoredConversationId();
+  if (activeConversationId) {
+    scheduleSessionIdleReset();
   }
 }
 
@@ -250,6 +336,8 @@ async function sendMessage(message) {
   if (!message.trim()) return;
 
   isSending = true;
+  clearTimeout(sessionIdleTimer);
+  storeActivityNow();
   updateMicState();
   resetSpeechQueue();
   
@@ -266,7 +354,11 @@ async function sendMessage(message) {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history: buildRequestHistory() })
+      body: JSON.stringify({
+        message,
+        conversation_id: activeConversationId || null,
+        history: buildRequestHistory()
+      })
     });
 
     if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
@@ -300,7 +392,10 @@ async function sendMessage(message) {
           event = JSON.parse(trimmed);
         } catch (parseError) { continue; }
         
-        if (event.type === 'token') {
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          scheduleSessionIdleReset();
+        } else if (event.type === 'token') {
           const token = event.value || '';
           if (token) {
             setThinkingStatus();
@@ -326,6 +421,7 @@ async function sendMessage(message) {
     }
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
+    scheduleSessionIdleReset();
   } catch (err) {
     const fallback = 'Terjadi kesalahan sistem, mohon coba lagi.';
     setSubtitle(fallback, 'error');
@@ -414,3 +510,4 @@ micBtn.addEventListener('touchstart', (e) => {
 window.addEventListener('mouseup', () => { if (micRecognition) stopRecording(); });
 micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
 micBtn.addEventListener('touchcancel', (e) => { e.preventDefault(); stopRecording(); });
+hydrateConversationState();

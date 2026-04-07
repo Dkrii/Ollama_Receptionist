@@ -1,8 +1,12 @@
 import re
+import logging
 from typing import Dict, List
 
 from config import settings
 from rag.client import get_collection, embed_texts
+
+
+_logger = logging.getLogger(__name__)
 
 
 STOPWORDS = {
@@ -43,6 +47,14 @@ LAYOUT_MARKERS = (
     "lobi",
     "lantai",
 )
+FOLLOW_UP_MARKERS = (
+    "itu",
+    "tadi",
+    "yang tadi",
+    "kalau yang",
+    "lantai berapa",
+    "jam berapa",
+)
 
 
 def _normalize_tokens(text: str) -> list[str]:
@@ -52,6 +64,37 @@ def _normalize_tokens(text: str) -> list[str]:
         for token in cleaned.split()
         if (len(token) >= 4 or token in IMPORTANT_SHORT_TOKENS) and token not in STOPWORDS
     ]
+
+
+def _message_tokens(text: str) -> list[str]:
+    cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
+    return [token for token in cleaned.split() if token]
+
+
+def _last_user_turn(history: list[dict] | None) -> str:
+    for item in reversed(history or []):
+        if str(item.get("role", "")).lower() != "user":
+            continue
+        content = str(item.get("content", "")).strip()
+        if content:
+            return content
+    return ""
+
+
+def _is_follow_up_query(query: str) -> bool:
+    lowered = " ".join((query or "").lower().split())
+    if any(marker in lowered for marker in FOLLOW_UP_MARKERS):
+        return True
+    return len(_message_tokens(lowered)) <= 6
+
+
+def _build_retrieval_query(query: str, history: list[dict] | None = None) -> str:
+    previous_user_turn = _last_user_turn(history)
+    if not previous_user_turn:
+        return query
+    if not _is_follow_up_query(query):
+        return query
+    return f"{previous_user_turn}\n{query}"
 
 
 def _query_terms(query: str) -> list[str]:
@@ -78,81 +121,6 @@ def _query_terms(query: str) -> list[str]:
 
 def _query_focus_tokens(query: str) -> list[str]:
     return [token for token in _normalize_tokens(query) if token not in LOCATION_TOKENS]
-
-
-def _normalize_history(history: list[dict] | None) -> list[dict]:
-    normalized: list[dict] = []
-    for item in history or []:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role", "")).strip().lower()
-        content = str(item.get("content", "")).strip()
-        if role not in {"user", "assistant"} or not content:
-            continue
-        normalized.append({"role": role, "content": content})
-    return normalized[-6:]
-
-
-def _is_follow_up_query(query: str) -> bool:
-    lowered = (query or "").strip().lower()
-    if not lowered:
-        return False
-
-    follow_up_markers = (
-        "detail",
-        "rinci",
-        "lebih lengkap",
-        "lebih detail",
-        "jelaskan lagi",
-        "lanjutkan",
-        "yang detail",
-        "versi detail",
-        "elaborasi",
-        "perjelas",
-    )
-    if any(marker in lowered for marker in follow_up_markers):
-        return True
-
-    tokens = _normalize_tokens(lowered)
-    return len(tokens) <= 3
-
-
-def _build_retrieval_query(query: str, history: list[dict] | None = None) -> str:
-    normalized_history = _normalize_history(history)
-    if not normalized_history or not _is_follow_up_query(query):
-        return query
-
-    recent_user_messages = [
-        item["content"]
-        for item in normalized_history
-        if item["role"] == "user"
-    ]
-    if not recent_user_messages:
-        return query
-
-    previous_topic = recent_user_messages[-1]
-    if len(recent_user_messages) >= 2 and previous_topic.strip().lower() == query.strip().lower():
-        previous_topic = recent_user_messages[-2]
-
-    if not previous_topic:
-        return query
-
-    recent_assistant_messages = [
-        item["content"]
-        for item in normalized_history
-        if item["role"] == "assistant"
-    ]
-    assistant_context = recent_assistant_messages[-1] if recent_assistant_messages else ""
-    assistant_context = assistant_context[:400].strip()
-
-    if assistant_context:
-        return (
-            f"Topik sebelumnya dari user: {previous_topic}\n"
-            f"Ringkasan jawaban sebelumnya: {assistant_context}\n"
-            f"Pertanyaan lanjutan: {query}"
-        )
-
-    return f"Topik sebelumnya: {previous_topic}\nPertanyaan lanjutan: {query}"
 
 
 def _structured_subject_boost(query: str, content: str) -> tuple[int, int]:
@@ -214,7 +182,7 @@ def _is_layout_chunk(content: str) -> bool:
 def _items_are_relevant(query: str, items: list[dict]) -> bool:
     query_terms = _query_terms(query)
     if not query_terms:
-        return bool(items)
+        return False
 
     best_match_count = 0
     best_coverage = 0.0
@@ -285,19 +253,26 @@ def _rerank_items(query: str, items: list[dict]) -> list[dict]:
 
 
 def retrieve_context(query: str, history: list[dict] | None = None) -> Dict:
-    collection = get_collection()
     retrieval_query = _build_retrieval_query(query, history=history)
-    query_vector = embed_texts([retrieval_query])[0]
+    try:
+        collection = get_collection()
+        query_vector = embed_texts([retrieval_query])[0]
 
-    result = collection.query(
-        query_embeddings=[query_vector],
-        n_results=_candidate_count(collection),
-        include=["documents", "metadatas", "distances"],
-    )
+        result = collection.query(
+            query_embeddings=[query_vector],
+            n_results=_candidate_count(collection),
+            include=["documents", "metadatas", "distances"],
+        )
+    except Exception:
+        _logger.exception("rag.retrieve failed query=%s", retrieval_query)
+        return {
+            "context": "",
+            "citations": [],
+        }
 
-    documents: List[str] = result.get("documents", [[]])[0]
-    metadatas: List[dict] = result.get("metadatas", [[]])[0]
-    distances: List[float] = result.get("distances", [[]])[0]
+    documents: List[str] = (result.get("documents") or [[]])[0]
+    metadatas: List[dict] = (result.get("metadatas") or [[]])[0]
+    distances: List[float] = (result.get("distances") or [[]])[0]
 
     items = []
     for doc, meta, distance in zip(documents, metadatas, distances):

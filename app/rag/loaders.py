@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from typing import List, Dict
 
@@ -163,11 +164,12 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
 def build_chunks(path: Path, text: str, chunk_size: int, overlap: int) -> List[Dict]:
     chunks = chunk_text(text, chunk_size, overlap)
     records: List[Dict] = []
+    path_fingerprint = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:16]
 
     for idx, chunk in enumerate(chunks):
         records.append(
             {
-                "id": f"{path.name}:{idx}",
+                "id": f"{path.name}:{path_fingerprint}:{idx}",
                 "content": chunk,
                 "metadata": {
                     "source": str(path.name),

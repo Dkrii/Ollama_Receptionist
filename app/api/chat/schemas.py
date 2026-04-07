@@ -8,4 +8,5 @@ class ChatTurn(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: str | None = None
     history: list[ChatTurn] = Field(default_factory=list)

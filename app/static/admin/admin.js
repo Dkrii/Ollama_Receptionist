@@ -26,6 +26,14 @@ const dashCoverage = document.getElementById('dashCoverage');
 const dashCheckedAt = document.getElementById('dashCheckedAt');
 const dashRecentActivity = document.getElementById('dashRecentActivity');
 const dashInsightText = document.getElementById('dashInsightText');
+const employeeForm = document.getElementById('employeeForm');
+const employeeSaveBtn = document.getElementById('employeeSaveBtn');
+const employeeNamaInput = document.getElementById('employeeNama');
+const employeeDepartemenInput = document.getElementById('employeeDepartemen');
+const employeeJabatanInput = document.getElementById('employeeJabatan');
+const employeeNomorWaInput = document.getElementById('employeeNomorWa');
+const employeeTableBody = document.getElementById('employeeTableBody');
+const employeeTableEmpty = document.getElementById('employeeTableEmpty');
 
 function setPageStatus(text, mode = 'active') {
   adminPageStatus.textContent = text;
@@ -78,7 +86,66 @@ function activateView(viewName) {
 
 function getViewFromHash() {
   if (window.location.hash === '#knowledge') return 'knowledge';
+  if (window.location.hash === '#employees') return 'employees';
   return 'dashboard';
+}
+
+function renderEmployeeTable(items) {
+  if (!employeeTableBody || !employeeTableEmpty) return;
+
+  employeeTableBody.innerHTML = '';
+  for (const item of items) {
+    const row = document.createElement('tr');
+
+    const namaCell = document.createElement('td');
+    namaCell.textContent = item.nama || '-';
+
+    const departemenCell = document.createElement('td');
+    departemenCell.textContent = item.departemen || '-';
+
+    const jabatanCell = document.createElement('td');
+    jabatanCell.textContent = item.jabatan || '-';
+
+    const waCell = document.createElement('td');
+    waCell.textContent = item.nomor_wa || '-';
+
+    row.appendChild(namaCell);
+    row.appendChild(departemenCell);
+    row.appendChild(jabatanCell);
+    row.appendChild(waCell);
+    employeeTableBody.appendChild(row);
+  }
+
+  employeeTableEmpty.classList.toggle('is-hidden', items.length > 0);
+}
+
+async function refreshEmployees() {
+  const response = await fetch('/api/admin/employees');
+  if (!response.ok) throw new Error('Gagal memuat data karyawan');
+
+  const payload = await response.json();
+  const employees = payload.employees || [];
+  renderEmployeeTable(employees);
+}
+
+async function saveEmployee(payload) {
+  const response = await fetch('/api/admin/employees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    let detail = 'Gagal menyimpan data karyawan';
+    try {
+      const errorData = await response.json();
+      detail = errorData.detail || detail;
+    } catch (error) {
+    }
+    throw new Error(detail);
+  }
+
+  return response.json();
 }
 
 function renderDashboardActivity(summaryData) {
@@ -376,6 +443,43 @@ if (knowledgeTableBody) {
   });
 }
 
+if (employeeForm) {
+  employeeForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    if (!employeeNamaInput || !employeeDepartemenInput || !employeeJabatanInput || !employeeNomorWaInput) {
+      setPageStatus('Warning: form karyawan tidak lengkap', 'warning');
+      return;
+    }
+
+    const payload = {
+      nama: employeeNamaInput.value,
+      departemen: employeeDepartemenInput.value,
+      jabatan: employeeJabatanInput.value,
+      nomor_wa: employeeNomorWaInput.value
+    };
+
+    if (employeeSaveBtn) {
+      employeeSaveBtn.disabled = true;
+      employeeSaveBtn.textContent = 'Menyimpan...';
+    }
+
+    try {
+      await saveEmployee(payload);
+      employeeForm.reset();
+      await refreshEmployees();
+      setPageStatus('Data karyawan berhasil disimpan', 'active');
+    } catch (error) {
+      setPageStatus(error.message || 'Warning: gagal menyimpan data karyawan', 'warning');
+    } finally {
+      if (employeeSaveBtn) {
+        employeeSaveBtn.disabled = false;
+        employeeSaveBtn.textContent = 'Simpan';
+      }
+    }
+  });
+}
+
 for (const navItem of navViewItems) {
   navItem.addEventListener('click', () => {
     const targetView = navItem.dataset.view || 'dashboard';
@@ -398,6 +502,7 @@ window.addEventListener('hashchange', () => {
   try {
     activateView(getViewFromHash());
     await refreshKnowledgeSummary();
+    await refreshEmployees();
     setPageStatus('Admin Active', 'active');
   } catch (error) {
     setPageStatus('Warning: gagal memuat panel admin', 'warning');

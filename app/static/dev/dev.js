@@ -6,6 +6,9 @@ const micBtn = document.getElementById('micBtn');
 const micWrapper = document.getElementById('micWrapper');
 const avatarEl = document.getElementById('kioskAvatar');
 const debugStatsEl = document.getElementById('debugStats');
+const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
+const CONVERSATION_ACTIVITY_STORAGE_KEY = 'kioskConversationLastActivity';
+const SESSION_IDLE_MS = 5 * 60 * 1000;
 
 const AVATAR_STATES = ['IDLE', 'LISTENING', 'THINGKING', 'TALKING'];
 const avatarCache = new Map();
@@ -19,6 +22,54 @@ let conversationHistory = [];
 let micRecognition = null;
 let hasConversationStarted = false;
 let conversationResetTimer = null;
+let sessionIdleTimer = null;
+let activeConversationId = '';
+
+function isStorageAvailable() {
+  return typeof window.sessionStorage !== 'undefined';
+}
+
+function readStoredConversationId() {
+  if (!isStorageAvailable()) return '';
+  return window.sessionStorage.getItem(CONVERSATION_ID_STORAGE_KEY) || '';
+}
+
+function readStoredActivityAt() {
+  if (!isStorageAvailable()) return 0;
+  return Number(window.sessionStorage.getItem(CONVERSATION_ACTIVITY_STORAGE_KEY) || 0);
+}
+
+function storeActivityNow() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.setItem(CONVERSATION_ACTIVITY_STORAGE_KEY, String(Date.now()));
+}
+
+function clearStoredConversationState() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.removeItem(CONVERSATION_ID_STORAGE_KEY);
+  window.sessionStorage.removeItem(CONVERSATION_ACTIVITY_STORAGE_KEY);
+}
+
+function setActiveConversationId(value) {
+  activeConversationId = (value || '').trim();
+
+  if (!isStorageAvailable()) return;
+
+  if (activeConversationId) {
+    window.sessionStorage.setItem(CONVERSATION_ID_STORAGE_KEY, activeConversationId);
+    storeActivityNow();
+    return;
+  }
+
+  clearStoredConversationState();
+}
+
+function shouldResetStoredConversation() {
+  const storedConversationId = readStoredConversationId();
+  const lastActivityAt = readStoredActivityAt();
+  if (!storedConversationId || !lastActivityAt) return false;
+  return (Date.now() - lastActivityAt) >= SESSION_IDLE_MS;
+}
 
 function buildRequestHistory() {
   return conversationHistory.slice(-6);
@@ -31,6 +82,35 @@ function appendConversationTurn(role, content) {
   conversationHistory.push({ role, content: text });
   if (conversationHistory.length > 12) {
     conversationHistory = conversationHistory.slice(-12);
+  }
+  storeActivityNow();
+}
+
+function clearConversationState() {
+  clearTimeout(sessionIdleTimer);
+  conversationHistory = [];
+  clearStoredConversationState();
+  activeConversationId = '';
+}
+
+function scheduleSessionIdleReset() {
+  clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = setTimeout(() => {
+    clearConversationState();
+    resetConversationLayout();
+    renderDebugStats(null);
+  }, SESSION_IDLE_MS);
+}
+
+function hydrateConversationState() {
+  if (shouldResetStoredConversation()) {
+    clearStoredConversationState();
+    return;
+  }
+
+  activeConversationId = readStoredConversationId();
+  if (activeConversationId) {
+    scheduleSessionIdleReset();
   }
 }
 
@@ -436,13 +516,18 @@ async function sendMessageNonStream(message, thinkingNode = null) {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history: buildRequestHistory() })
+    body: JSON.stringify({
+      message,
+      conversation_id: activeConversationId || null,
+      history: buildRequestHistory()
+    })
   });
 
   if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
 
   const data = await response.json();
   const answer = data.answer || 'Terjadi kesalahan saat memproses pertanyaan.';
+  setActiveConversationId(data.conversation_id || activeConversationId);
   activateConversationLayout();
   clearChat();
   const botBubble = addBotBubble();
@@ -454,6 +539,7 @@ async function sendMessageNonStream(message, thinkingNode = null) {
 
   appendConversationTurn('user', message);
   appendConversationTurn('assistant', answer);
+  scheduleSessionIdleReset();
   scrollChatToBottom();
   speakText(answer);
   if (!window.speechSynthesis) {
@@ -470,6 +556,8 @@ async function sendMessage() {
 
   clearChat();
   input.value = '';
+  clearTimeout(sessionIdleTimer);
+  storeActivityNow();
   setComposerBusy(true);
   resetSpeechQueue();
 
@@ -487,7 +575,11 @@ async function sendMessage() {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history: buildRequestHistory() })
+      body: JSON.stringify({
+        message,
+        conversation_id: activeConversationId || null,
+        history: buildRequestHistory()
+      })
     });
 
     if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
@@ -520,7 +612,10 @@ async function sendMessage() {
           continue;
         }
 
-        if (event.type === 'token') {
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          scheduleSessionIdleReset();
+        } else if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
 
@@ -599,6 +694,7 @@ async function sendMessage() {
 
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
+    scheduleSessionIdleReset();
   } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());
     const fallbackMessage = 'Terjadi kesalahan saat memproses pertanyaan.';
@@ -765,3 +861,4 @@ if (window.speechSynthesis && typeof window.speechSynthesis.addEventListener ===
 syncComposerState();
 updateAvatarState();
 preloadAvatarStates();
+hydrateConversationState();

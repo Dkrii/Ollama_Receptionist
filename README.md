@@ -41,6 +41,7 @@ Response:
 ```json
 {
   "answer": "...",
+  "conversation_id": "c3f6c9c6-5a48-4bcb-9b54-3fc8ad18f6b7",
   "citations": [
     {
       "content": "...",
@@ -59,19 +60,29 @@ Response:
 ## 5) Notes
 - STT/TTS dijalankan di browser (lebih stabil di Windows Docker Desktop).
 - Port aplikasi di-bind ke localhost (`127.0.0.1:8000`).
-- Source code `app/` di-mount ke container `kiosk-app`, jadi perubahan HTML/CSS/JS langsung terbaca tanpa `docker compose build app`.
+- Source code `app/` di-mount ke container `kiosk-app`, dan backend dijalankan dengan `uvicorn --reload` di Docker Compose agar perubahan Python/HTML/CSS/JS langsung terbaca tanpa `docker compose build app`.
+- SQLite memory percakapan disimpan di Docker named volume agar lebih stabil untuk data aplikasi dibanding bind mount source code.
 - Jika mengubah dependency Python (`requirements.txt`), tetap perlu rebuild image app.
 
+### Alur Chat/RAG
+- Diagram dan penjelasan alur request -> retrieval -> jawaban ada di [docs/chat-rag-flow.md](docs/chat-rag-flow.md)
+
 ### Latency tuning (tetap pakai `qwen2.5:3b`)
-- `RAG_TOP_K=3` untuk mengurangi jumlah chunk yang diproses model.
-- `RAG_MAX_CONTEXT_CHARS=3200` untuk membatasi panjang konteks.
+- `RAG_TOP_K=2` untuk menjaga retrieval tetap fokus.
+- `RAG_MAX_CONTEXT_CHARS=1600` untuk membatasi panjang konteks.
 - `OLLAMA_NUM_PREDICT=160` untuk membatasi panjang jawaban default.
+- `OLLAMA_NUM_PREDICT_LONG=320` untuk pertanyaan yang memang meminta detail.
 - `OLLAMA_NUM_CTX=2048` untuk menurunkan beban context window.
 - `OLLAMA_NUM_THREAD=0` biarkan otomatis, atau isi jumlah core CPU jika ingin pinning manual.
 
 ### Fallback policy
 - `RAG_FALLBACK_POLICY=context_only` (default): selama retrieval menemukan konteks, AI tetap menjawab dari konteks.
 - `RAG_FALLBACK_POLICY=strict`: aktifkan fallback agresif untuk pertanyaan/jawaban yang dinilai kurang relevan.
+
+### Chat session memory
+- SQLite disimpan di `/workspace/runtime/chat.sqlite3` di dalam container, dengan persistence melalui Docker named volume `chat_runtime`.
+- Backend mengelola `conversation_id` sebagai source of truth memory percakapan.
+- Frontend menyimpan `conversation_id` di `sessionStorage` dan menghapus sesi setelah idle 5 menit.
 
 ## 6) Windows Kiosk Mode (Manual)
 
