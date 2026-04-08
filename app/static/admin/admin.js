@@ -34,6 +34,8 @@ const employeeJabatanInput = document.getElementById('employeeJabatan');
 const employeeNomorWaInput = document.getElementById('employeeNomorWa');
 const employeeTableBody = document.getElementById('employeeTableBody');
 const employeeTableEmpty = document.getElementById('employeeTableEmpty');
+const contactMessageTableBody = document.getElementById('contactMessageTableBody');
+const contactMessageTableEmpty = document.getElementById('contactMessageTableEmpty');
 
 function setPageStatus(text, mode = 'active') {
   adminPageStatus.textContent = text;
@@ -126,6 +128,75 @@ async function refreshEmployees() {
   const payload = await response.json();
   const employees = payload.employees || [];
   renderEmployeeTable(employees);
+}
+
+function buildRecipientLabel(employeeName) {
+  const cleaned = String(employeeName || '').trim();
+  if (!cleaned) return 'Pak/Bu -';
+  const firstName = cleaned.split(/\s+/)[0] || cleaned;
+  return `Pak ${firstName}`;
+}
+
+function buildDeliveryBadge(status) {
+  if (status === 'sent_dummy') {
+    return { label: 'Sent Dummy', className: 'vr-knowledge-status--indexed' };
+  }
+  return { label: 'Queued', className: 'vr-knowledge-status--pending' };
+}
+
+function renderContactMessageTable(items) {
+  if (!contactMessageTableBody || !contactMessageTableEmpty) return;
+
+  contactMessageTableBody.innerHTML = '';
+  for (const item of items) {
+    const row = document.createElement('tr');
+
+    const labelCell = document.createElement('td');
+    const labelBadge = document.createElement('span');
+    labelBadge.className = 'vr-recipient-label';
+    labelBadge.textContent = buildRecipientLabel(item.employee_nama);
+    labelCell.appendChild(labelBadge);
+
+    const employeeCell = document.createElement('td');
+    employeeCell.textContent = item.employee_nama || '-';
+
+    const visitorCell = document.createElement('td');
+    visitorCell.textContent = item.visitor_name || '-';
+
+    const goalCell = document.createElement('td');
+    goalCell.textContent = item.visitor_goal || '-';
+
+    const statusCell = document.createElement('td');
+    const statusBadge = document.createElement('span');
+    const statusMeta = buildDeliveryBadge(item.delivery_status);
+    statusBadge.className = `vr-knowledge-status ${statusMeta.className}`;
+    statusBadge.textContent = statusMeta.label;
+    statusCell.appendChild(statusBadge);
+
+    const timeCell = document.createElement('td');
+    timeCell.textContent = item.created_at
+      ? new Date(item.created_at).toLocaleString('id-ID')
+      : '-';
+
+    row.appendChild(labelCell);
+    row.appendChild(employeeCell);
+    row.appendChild(visitorCell);
+    row.appendChild(goalCell);
+    row.appendChild(statusCell);
+    row.appendChild(timeCell);
+    contactMessageTableBody.appendChild(row);
+  }
+
+  contactMessageTableEmpty.classList.toggle('is-hidden', items.length > 0);
+}
+
+async function refreshContactMessages() {
+  const response = await fetch('/api/admin/contact-messages?limit=50');
+  if (!response.ok) throw new Error('Gagal memuat pesan titipan');
+
+  const payload = await response.json();
+  const messages = payload.messages || [];
+  renderContactMessageTable(messages);
 }
 
 async function saveEmployee(payload) {
@@ -468,6 +539,7 @@ if (employeeForm) {
       await saveEmployee(payload);
       employeeForm.reset();
       await refreshEmployees();
+      await refreshContactMessages();
       setPageStatus('Data karyawan berhasil disimpan', 'active');
     } catch (error) {
       setPageStatus(error.message || 'Warning: gagal menyimpan data karyawan', 'warning');
@@ -503,6 +575,7 @@ window.addEventListener('hashchange', () => {
     activateView(getViewFromHash());
     await refreshKnowledgeSummary();
     await refreshEmployees();
+    await refreshContactMessages();
     setPageStatus('Admin Active', 'active');
   } catch (error) {
     setPageStatus('Warning: gagal memuat panel admin', 'warning');

@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Any
 
 
 class ChatTurn(BaseModel):
@@ -10,3 +11,10 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
     history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ContactFlowRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+    history: list[ChatTurn] = Field(default_factory=list)
+    flow_state: dict[str, Any] = Field(default_factory=dict)

@@ -59,6 +59,14 @@ class AdminAppService:
         }
 
     @staticmethod
+    def list_contact_messages(limit: int = 50) -> dict:
+        items = AdminRepository.list_contact_messages(limit=limit)
+        return {
+            "messages": items,
+            "total": len(items),
+        }
+
+    @staticmethod
     def reindex() -> dict:
         return ingest_knowledge()
 

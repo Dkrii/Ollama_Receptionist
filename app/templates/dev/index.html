@@ -7,10 +7,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/dev/dev.css?v=20260406-4" />
+  <link rel="stylesheet" href="/static/dev/dev.css?v=20260408-8" />
 </head>
 <body>
   <main id="kioskRoot" class="kiosk-container">
+    <header class="kiosk-topbar" aria-label="Status deteksi wajah">
+      <div class="kiosk-logo" aria-label="Akebono">AKEBONO</div>
+      <div id="faceIndicator" class="kiosk-face-indicator is-searching" role="status" aria-live="polite">
+        <span class="kiosk-face-indicator__dot" aria-hidden="true"></span>
+        <span id="faceIndicatorText">Mencari wajah...</span>
+      </div>
+    </header>
+
     <div class="kiosk-bg" aria-hidden="true">
       <div class="kiosk-bg__image"></div>
       <div class="kiosk-bg__overlay"></div>
@@ -23,39 +31,17 @@
       <div class="kiosk-stage__halo"></div>
       <div class="kiosk-stage__floor"></div>
       <img id="kioskAvatar" src="/static/kiosk/models/IDLE.png" alt="Virtual Receptionist" class="kiosk-avatar" />
+      <video id="faceCamera" class="kiosk-camera" autoplay muted playsinline></video>
     </section>
 
     <section id="chatTray" class="kiosk-chat-tray" aria-live="polite" aria-label="Percakapan virtual receptionist">
       <div id="chatBox" class="chat-history" aria-live="polite"></div>
     </section>
 
-    <section class="chat-composer">
-      <div id="micWrapper" class="mic-wrapper">
-        <div class="mic-ring mic-ring-1"></div>
-        <div class="mic-ring mic-ring-2"></div>
-        <button id="micBtn" class="glass-mic-btn" type="button" aria-label="Tahan untuk bicara">
-          <svg fill="currentColor" viewBox="0 0 24 24" width="28" height="28">
-            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="composer-actions">
-        <label class="input-container" for="messageInput">
-          <input type="text" id="messageInput" class="glass-input" placeholder="Tulis pesan Anda..." autocomplete="off" />
-        </label>
-        <button id="sendBtn" class="glass-send-btn" type="button" aria-label="Kirim pesan">
-          <svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-          </svg>
-        </button>
-      </div>
-    </section>
-
+    <section id="debugRuntime" class="kiosk-debug" aria-live="polite" aria-label="Runtime debug info"></section>
     <ul id="debugStats" hidden></ul>
   </main>
 
-  <script src="/static/dev/dev.js?v=20260406-4"></script>
+  <script src="/static/dev/dev.js?v=20260408-8"></script>
 </body>
 </html>

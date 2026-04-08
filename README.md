@@ -37,6 +37,41 @@ Body:
 }
 ```
 
+### Employee Contact Flow API
+`POST /api/chat/contact-flow`
+
+Body:
+```json
+{
+  "message": "tolong hubungi karyawan budi",
+  "conversation_id": null,
+  "history": [],
+  "flow_state": { "stage": "idle" }
+}
+```
+
+Response (handled by contact flow):
+```json
+{
+  "handled": true,
+  "answer": "Saya menemukan beberapa karyawan...",
+  "conversation_id": "...",
+  "flow_state": {
+    "stage": "await_disambiguation",
+    "action": "notify",
+    "candidates": []
+  }
+}
+```
+
+Alur ini dipakai UI `/` dan `/dev` untuk:
+- intent "hubungi karyawan"
+- pencarian nama/divisi dari data karyawan panel admin
+- disambiguasi jika kandidat > 1
+- konfirmasi ya/tidak
+- aksi `notify` (default) atau `call` (queue placeholder)
+- feedback suara (TTS) dari browser
+
 Response:
 ```json
 {

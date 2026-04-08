@@ -129,6 +129,8 @@ let speechResidualBuffer = '';
 let conversationHistory = [];
 let sessionIdleTimer = null;
 let activeConversationId = '';
+let contactFlowState = { stage: 'idle' };
+let contactBusyFollowUpTimer = null;
 
 function isStorageAvailable() {
   return typeof window.sessionStorage !== 'undefined';
@@ -192,9 +194,64 @@ function appendConversationTurn(role, content) {
 
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
+  clearTimeout(contactBusyFollowUpTimer);
   conversationHistory = [];
+  contactFlowState = { stage: 'idle' };
   clearStoredConversationState();
   activeConversationId = '';
+}
+
+function clearContactBusyFollowUp() {
+  clearTimeout(contactBusyFollowUpTimer);
+  contactBusyFollowUpTimer = null;
+}
+
+function scheduleContactBusyFollowUp(followUp) {
+  if (!followUp || followUp.mode !== 'timeout-check') return;
+
+  const minDelay = Number(followUp.after_ms_min || 5000);
+  const maxDelay = Number(followUp.after_ms_max || minDelay);
+  const delay = Math.max(minDelay, Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay);
+  const timeoutMessage = String(followUp.message || '__contact_timeout__');
+
+  clearContactBusyFollowUp();
+  const snapshotState = JSON.parse(JSON.stringify(contactFlowState || { stage: 'idle' }));
+
+  contactBusyFollowUpTimer = setTimeout(async () => {
+    try {
+      const response = await fetch('/api/chat/contact-flow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: timeoutMessage,
+          conversation_id: activeConversationId || null,
+          history: buildRequestHistory(),
+          flow_state: snapshotState
+        })
+      });
+
+      if (!response.ok) return;
+      const data = await response.json();
+      setActiveConversationId(data.conversation_id || activeConversationId);
+
+      if (data.flow_state && typeof data.flow_state === 'object') {
+        contactFlowState = data.flow_state;
+      } else {
+        contactFlowState = { stage: 'idle' };
+      }
+
+      if (!data.handled) return;
+
+      const answer = String(data.answer || '').trim();
+      if (!answer) return;
+
+      setSubtitle(answer, 'bot');
+      appendConversationTurn('assistant', answer);
+      scheduleSessionIdleReset();
+      speakText(answer);
+    } catch (error) {
+    }
+  }, delay);
 }
 
 function scheduleSessionIdleReset() {
@@ -330,6 +387,53 @@ function drainSpeechQueue() {
   window.speechSynthesis.speak(utter);
 }
 
+async function tryHandleEmployeeContactFlow(message) {
+  const response = await fetch('/api/chat/contact-flow', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      conversation_id: activeConversationId || null,
+      history: buildRequestHistory(),
+      flow_state: contactFlowState || { stage: 'idle' }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Gagal memproses alur hubungi karyawan');
+  }
+
+  const data = await response.json();
+  setActiveConversationId(data.conversation_id || activeConversationId);
+
+  if (data.flow_state && typeof data.flow_state === 'object') {
+    contactFlowState = data.flow_state;
+  } else {
+    contactFlowState = { stage: 'idle' };
+  }
+
+  if (contactFlowState.stage !== 'contacting_unavailable_pending') {
+    clearContactBusyFollowUp();
+  }
+
+  if (!data.handled) {
+    return false;
+  }
+
+  const answer = String(data.answer || '').trim() || 'Baik, silakan ulangi permintaannya.';
+  setSubtitle(answer, 'bot');
+  appendConversationTurn('user', message);
+  appendConversationTurn('assistant', answer);
+  scheduleSessionIdleReset();
+  speakText(answer);
+
+  if (data.follow_up && typeof data.follow_up === 'object') {
+    scheduleContactBusyFollowUp(data.follow_up);
+  }
+
+  return true;
+}
+
 // Messaging Logic
 async function sendMessage(message) {
   if (isSending) return;
@@ -351,6 +455,11 @@ async function sendMessage(message) {
   let streamEventError = '';
 
   try {
+    const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
+    if (handledByContactFlow) {
+      return;
+    }
+
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

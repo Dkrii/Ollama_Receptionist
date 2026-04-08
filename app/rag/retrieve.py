@@ -47,16 +47,6 @@ LAYOUT_MARKERS = (
     "lobi",
     "lantai",
 )
-FOLLOW_UP_MARKERS = (
-    "itu",
-    "tadi",
-    "yang tadi",
-    "kalau yang",
-    "lantai berapa",
-    "jam berapa",
-)
-
-
 def _normalize_tokens(text: str) -> list[str]:
     cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
     return [
@@ -64,37 +54,6 @@ def _normalize_tokens(text: str) -> list[str]:
         for token in cleaned.split()
         if (len(token) >= 4 or token in IMPORTANT_SHORT_TOKENS) and token not in STOPWORDS
     ]
-
-
-def _message_tokens(text: str) -> list[str]:
-    cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
-    return [token for token in cleaned.split() if token]
-
-
-def _last_user_turn(history: list[dict] | None) -> str:
-    for item in reversed(history or []):
-        if str(item.get("role", "")).lower() != "user":
-            continue
-        content = str(item.get("content", "")).strip()
-        if content:
-            return content
-    return ""
-
-
-def _is_follow_up_query(query: str) -> bool:
-    lowered = " ".join((query or "").lower().split())
-    if any(marker in lowered for marker in FOLLOW_UP_MARKERS):
-        return True
-    return len(_message_tokens(lowered)) <= 6
-
-
-def _build_retrieval_query(query: str, history: list[dict] | None = None) -> str:
-    previous_user_turn = _last_user_turn(history)
-    if not previous_user_turn:
-        return query
-    if not _is_follow_up_query(query):
-        return query
-    return f"{previous_user_turn}\n{query}"
 
 
 def _query_terms(query: str) -> list[str]:
@@ -253,7 +212,7 @@ def _rerank_items(query: str, items: list[dict]) -> list[dict]:
 
 
 def retrieve_context(query: str, history: list[dict] | None = None) -> Dict:
-    retrieval_query = _build_retrieval_query(query, history=history)
+    retrieval_query = query
     try:
         collection = get_collection()
         query_vector = embed_texts([retrieval_query])[0]

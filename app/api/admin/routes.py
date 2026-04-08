@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from api.admin.schemas import DeleteDocumentPayload, EmployeeCreatePayload
@@ -61,6 +61,14 @@ def create_employee(payload: EmployeeCreatePayload):
         return JSONResponse(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/admin/contact-messages")
+def list_contact_messages(limit: int = Query(default=50, ge=1, le=200)):
+    try:
+        return JSONResponse(AdminAppService.list_contact_messages(limit=limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

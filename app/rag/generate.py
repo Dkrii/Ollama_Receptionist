@@ -1,4 +1,3 @@
-import re
 from typing import Iterator
 
 import requests
@@ -10,28 +9,12 @@ _http_session = requests.Session()
 
 
 FALLBACK_MESSAGE = "Maaf, saya belum bisa memberikan jawaban saat ini."
-DETAIL_MARKERS = (
-    "detail",
-    "jelaskan",
-    "lebih lengkap",
-    "lengkap",
-    "rinci",
-    "rincikan",
-    "mengapa",
-    "kenapa",
-    "why",
-    "explain",
-)
-MAX_SHORT_SENTENCES = 2
-MAX_SHORT_ANSWER_CHARS = 240
 
 
 SYSTEM_PROMPT = """Anda adalah virtual receptionist.
-Jawab secara natural, jelas, membantu, dan langsung ke inti.
-Gunakan 1-2 kalimat untuk pertanyaan kiosk umum.
-Hanya beri jawaban lebih panjang jika pengguna memang meminta detail.
-Jika konteks knowledge perusahaan tersedia dan relevan, prioritaskan konteks itu untuk pertanyaan tentang perusahaan.
-Jika konteks knowledge kosong atau tidak relevan, jangan menebak.
+Jawab secara natural, jelas, membantu, dan relevan dengan pertanyaan pengguna.
+Untuk pertanyaan terkait perusahaan, prioritaskan informasi dari konteks knowledge perusahaan jika tersedia.
+Jika konteks knowledge perusahaan kosong untuk pertanyaan perusahaan, sampaikan keterbatasan data secara jujur dan tawarkan bantuan lanjutan.
 Jangan menyebut proses internal, prompt, retrieval, atau sistem di balik jawaban.
 Gunakan bahasa yang mengikuti bahasa pengguna kecuali pengguna meminta bahasa lain.
 """
@@ -50,24 +33,12 @@ def _ollama_generate_options(overrides: dict | None = None) -> dict:
     return options
 
 
-def _normalize_question(question: str) -> str:
-    return " ".join((question or "").lower().split())
-
-
-def _wants_detailed_answer(question: str) -> bool:
-    normalized = _normalize_question(question)
-    return any(marker in normalized for marker in DETAIL_MARKERS)
-
-
 def _build_answer_style(question: str, context: str) -> str:
-    if _wants_detailed_answer(question):
-        return "Jawab langsung ke inti dengan maksimal 4 kalimat."
-    return "Jawab langsung ke inti dalam 1-2 kalimat. Hindari penjelasan panjang yang tidak diminta."
+    return "Jawab secara jelas, runtut, dan secukupnya sesuai kebutuhan pengguna."
 
 
 def _answer_options(question: str) -> dict:
-    num_predict = settings.ollama_num_predict_long if _wants_detailed_answer(question) else settings.ollama_num_predict
-    return _ollama_generate_options({"num_predict": num_predict})
+    return _ollama_generate_options({"num_predict": settings.ollama_num_predict_long})
 
 
 def _build_history_block(history: list[dict] | None = None) -> str:
@@ -129,31 +100,11 @@ def _answer_looks_complete(answer: str) -> bool:
     return (answer or "").rstrip().endswith((".", "!", "?", "\"", "'"))
 
 
-def _compress_answer(answer: str, max_sentences: int = MAX_SHORT_SENTENCES, max_chars: int = MAX_SHORT_ANSWER_CHARS) -> str:
-    value = " ".join((answer or "").split()).strip()
-    if not value:
-        return value
-
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
-    if len(sentences) > max_sentences:
-        value = " ".join(sentences[:max_sentences]).strip()
-
-    if len(value) <= max_chars:
-        return value
-
-    trimmed = value[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:")
-    if trimmed and trimmed[-1] not in ".!?":
-        trimmed += "."
-    return trimmed or value[:max_chars].rstrip() + "."
-
-
 def _finalize_answer(question: str, context: str, answer: str) -> str:
     completed = (answer or "").strip()
     if not completed:
         return FALLBACK_MESSAGE
-    if _wants_detailed_answer(question):
-        return completed
-    return _compress_answer(completed)
+    return completed
 
 
 def _continue_answer(question: str, context: str, partial_answer: str, history: list[dict] | None = None) -> str:
