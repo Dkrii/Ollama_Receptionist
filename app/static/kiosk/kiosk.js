@@ -115,6 +115,7 @@ document.addEventListener('DOMContentLoaded', init3D);
 // --- END THREE JS ---
 
 const subtitlesBox = document.getElementById('subtitlesBox');
+const countdownBox = document.getElementById('countdownBox');
 const micBtn = document.getElementById('micBtn');
 const micHint = document.getElementById('micHint');
 const systemStatus = document.getElementById('systemStatus');
@@ -131,6 +132,8 @@ let sessionIdleTimer = null;
 let activeConversationId = '';
 let contactFlowState = { stage: 'idle' };
 let contactBusyFollowUpTimer = null;
+let contactBusyCountdownInterval = null;
+let isContactCountdownActive = false;
 
 function isStorageAvailable() {
   return typeof window.sessionStorage !== 'undefined';
@@ -195,63 +198,146 @@ function appendConversationTurn(role, content) {
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
   clearTimeout(contactBusyFollowUpTimer);
+  clearInterval(contactBusyCountdownInterval);
+  contactBusyCountdownInterval = null;
+  isContactCountdownActive = false;
   conversationHistory = [];
   contactFlowState = { stage: 'idle' };
   clearStoredConversationState();
   activeConversationId = '';
+  updateMicState();
 }
 
 function clearContactBusyFollowUp() {
   clearTimeout(contactBusyFollowUpTimer);
   contactBusyFollowUpTimer = null;
+  clearInterval(contactBusyCountdownInterval);
+  contactBusyCountdownInterval = null;
+  isContactCountdownActive = false;
+  if (countdownBox) {
+    countdownBox.innerHTML = '';
+    countdownBox.hidden = true;
+  }
+  updateMicState();
+}
+
+function renderContactCountdown(currentSecond, totalSeconds) {
+  if (!countdownBox) return;
+  countdownBox.hidden = false;
+  countdownBox.innerHTML = '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'kiosk-countdown';
+
+  const number = document.createElement('div');
+  number.className = 'kiosk-countdown__number';
+  number.textContent = String(currentSecond);
+
+  const label = document.createElement('div');
+  label.className = 'kiosk-countdown__label';
+  label.textContent = `Mohon tunggu ${currentSecond}/${totalSeconds} detik`;
+
+  wrap.appendChild(number);
+  wrap.appendChild(label);
+  countdownBox.appendChild(wrap);
+}
+
+function waitForCurrentSpeechToFinish(onDone) {
+  if (!window.speechSynthesis) {
+    onDone();
+    return;
+  }
+
+  const startedAt = Date.now();
+  const maxWaitMs = 20000;
+
+  const intervalId = setInterval(() => {
+    const stillSpeaking = isSpeakingQueue || window.speechSynthesis.speaking || window.speechSynthesis.pending;
+    if (!stillSpeaking || (Date.now() - startedAt) >= maxWaitMs) {
+      clearInterval(intervalId);
+      onDone();
+    }
+  }, 120);
 }
 
 function scheduleContactBusyFollowUp(followUp) {
-  if (!followUp || followUp.mode !== 'timeout-check') return;
+  if (!followUp || followUp.mode !== 'countdown-check') return;
 
-  const minDelay = Number(followUp.after_ms_min || 5000);
-  const maxDelay = Number(followUp.after_ms_max || minDelay);
-  const delay = Math.max(minDelay, Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay);
+  const durationSeconds = Math.max(1, Number(followUp.duration_seconds || 10));
+  const delay = durationSeconds * 1000;
   const timeoutMessage = String(followUp.message || '__contact_timeout__');
+  const preCountdownAnswer = String(followUp.pre_countdown_answer || '').trim();
 
   clearContactBusyFollowUp();
   const snapshotState = JSON.parse(JSON.stringify(contactFlowState || { stage: 'idle' }));
+  isContactCountdownActive = true;
+  if (micRecognition) {
+    stopRecording();
+  }
+  updateMicState();
 
-  contactBusyFollowUpTimer = setTimeout(async () => {
-    try {
-      const response = await fetch('/api/chat/contact-flow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: timeoutMessage,
-          conversation_id: activeConversationId || null,
-          history: buildRequestHistory(),
-          flow_state: snapshotState
-        })
-      });
-
-      if (!response.ok) return;
-      const data = await response.json();
-      setActiveConversationId(data.conversation_id || activeConversationId);
-
-      if (data.flow_state && typeof data.flow_state === 'object') {
-        contactFlowState = data.flow_state;
-      } else {
-        contactFlowState = { stage: 'idle' };
+  const startCountdown = () => {
+    let currentSecond = 1;
+    renderContactCountdown(currentSecond, durationSeconds);
+    setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
+    contactBusyCountdownInterval = setInterval(() => {
+      currentSecond += 1;
+      if (currentSecond <= durationSeconds) {
+        renderContactCountdown(currentSecond, durationSeconds);
+        setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
+        return;
       }
+      clearInterval(contactBusyCountdownInterval);
+      contactBusyCountdownInterval = null;
+    }, 1000);
 
-      if (!data.handled) return;
+    contactBusyFollowUpTimer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/chat/contact-flow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: timeoutMessage,
+            conversation_id: activeConversationId || null,
+            history: buildRequestHistory(),
+            flow_state: snapshotState
+          })
+        });
 
-      const answer = String(data.answer || '').trim();
-      if (!answer) return;
+        if (!response.ok) return;
+        const data = await response.json();
+        setActiveConversationId(data.conversation_id || activeConversationId);
 
-      setSubtitle(answer, 'bot');
-      appendConversationTurn('assistant', answer);
-      scheduleSessionIdleReset();
-      speakText(answer);
-    } catch (error) {
-    }
-  }, delay);
+        if (data.flow_state && typeof data.flow_state === 'object') {
+          contactFlowState = data.flow_state;
+        } else {
+          contactFlowState = { stage: 'idle' };
+        }
+
+        if (!data.handled) return;
+
+        const answer = String(data.answer || '').trim();
+        if (!answer) return;
+
+        setSubtitle(answer, 'bot');
+        appendConversationTurn('assistant', answer);
+        scheduleSessionIdleReset();
+        speakText(answer);
+      } catch (error) {
+      } finally {
+        clearContactBusyFollowUp();
+      }
+    }, delay);
+  };
+
+  if (preCountdownAnswer) {
+    setSubtitle(preCountdownAnswer, 'bot');
+    appendConversationTurn('assistant', preCountdownAnswer);
+    speakText(preCountdownAnswer, { onEnd: startCountdown });
+    return;
+  }
+
+  waitForCurrentSpeechToFinish(startCountdown);
 }
 
 function scheduleSessionIdleReset() {
@@ -292,6 +378,10 @@ setThinkingStatus();
 // Subtitle updates
 function setSubtitle(text, role = 'bot') {
   setThinkingStatus();
+  if (countdownBox) {
+    countdownBox.innerHTML = '';
+    countdownBox.hidden = true;
+  }
   subtitlesBox.innerHTML = '';
   const span = document.createElement('span');
   span.className = `kiosk-subtitle__text kiosk-subtitle__text--${role}`;
@@ -300,6 +390,10 @@ function setSubtitle(text, role = 'bot') {
 }
 
 function setThinking() {
+  if (countdownBox) {
+    countdownBox.innerHTML = '';
+    countdownBox.hidden = true;
+  }
   subtitlesBox.innerHTML = `
     <span class="kiosk-typing-indicator" aria-label="Berpikir...">
        <span class="kiosk-dot"></span>
@@ -314,19 +408,32 @@ function setThinking() {
 function updateMicState() {
   const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
   if (micBtn) {
-    micBtn.disabled = isSending || isSpeaking;
+    micBtn.disabled = isSending || isSpeaking || isContactCountdownActive;
+  }
+  if (micHint) {
+    micHint.textContent = isContactCountdownActive ? 'Mohon tunggu, sedang menghubungi...' : 'Tahan untuk bicara';
   }
 }
 
 // Speech Synthesis
-function speakText(text) {
-  if (!text || !window.speechSynthesis) return;
+function speakText(text, options = {}) {
+  const onEnd = typeof options.onEnd === 'function' ? options.onEnd : null;
+  if (!text || !window.speechSynthesis) {
+    if (onEnd) onEnd();
+    return;
+  }
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'id-ID';
   utter.onstart = updateMicState;
-  utter.onend = updateMicState;
-  utter.onerror = updateMicState;
+  utter.onend = () => {
+    updateMicState();
+    if (onEnd) onEnd();
+  };
+  utter.onerror = () => {
+    updateMicState();
+    if (onEnd) onEnd();
+  };
   window.speechSynthesis.speak(utter);
   updateMicState();
 }
@@ -557,7 +664,7 @@ function setupSpeechRecognition() {
 }
 
 function startRecording() {
-  if (isSending || micRecognition) return;
+  if (isSending || micRecognition || isContactCountdownActive) return;
   micRecognition = setupSpeechRecognition();
   if (!micRecognition) {
     alert('Speech recognition belum didukung browser ini.');
@@ -605,8 +712,8 @@ function stopRecording() {
 
 function cleanupRecording() {
   micBtn.classList.remove('is-recording');
-  micHint.textContent = "Tahan untuk bicara";
   micRecognition = null;
+  updateMicState();
 }
 
 // Event Listeners

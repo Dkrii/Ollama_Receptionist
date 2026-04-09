@@ -32,6 +32,13 @@ class Settings(BaseModel):
     chat_recent_turns: int = int(os.getenv("CHAT_RECENT_TURNS", "6"))
     chat_history_max_chars: int = int(os.getenv("CHAT_HISTORY_MAX_CHARS", "1000"))
     chat_transcript_retention_days: int = int(os.getenv("CHAT_TRANSCRIPT_RETENTION_DAYS", "7"))
+    chat_intent_max_retries: int = int(os.getenv("CHAT_INTENT_MAX_RETRIES", "2"))
+    chat_natural_response_enabled: bool = os.getenv("CHAT_NATURAL_RESPONSE_ENABLED", "1") in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 settings = Settings()

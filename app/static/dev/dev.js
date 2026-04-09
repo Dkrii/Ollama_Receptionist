@@ -79,6 +79,8 @@ let lastVadRms = 0;
 let lastDebugRenderAt = 0;
 let contactFlowState = { stage: 'idle' };
 let contactBusyFollowUpTimer = null;
+let contactBusyCountdownInterval = null;
+let isContactCountdownActive = false;
 const DEBUG_REFRESH_MS = 180;
 
 function setFaceIndicatorState(statusClass, label) {
@@ -354,7 +356,7 @@ function scheduleRecognitionSend() {
 }
 
 function syncAutoRecognitionState() {
-  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive()) {
+  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive() || isContactCountdownActive) {
     stopAutoRecognition(false);
     return;
   }
@@ -377,7 +379,7 @@ function setupAutoSpeechRecognition() {
 }
 
 function startAutoRecognition() {
-  if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive()) return;
+  if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive() || isContactCountdownActive) return;
 
   if (!autoRecognition) {
     autoRecognition = setupAutoSpeechRecognition();
@@ -750,6 +752,9 @@ function appendConversationTurn(role, content) {
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
   clearTimeout(contactBusyFollowUpTimer);
+  clearInterval(contactBusyCountdownInterval);
+  contactBusyCountdownInterval = null;
+  isContactCountdownActive = false;
   conversationHistory = [];
   contactFlowState = { stage: 'idle' };
   clearStoredConversationState();
@@ -759,18 +764,48 @@ function clearConversationState() {
 function clearContactBusyFollowUp() {
   clearTimeout(contactBusyFollowUpTimer);
   contactBusyFollowUpTimer = null;
+  clearInterval(contactBusyCountdownInterval);
+  contactBusyCountdownInterval = null;
+  isContactCountdownActive = false;
+  syncComposerState();
 }
 
 function scheduleContactBusyFollowUp(followUp) {
-  if (!followUp || followUp.mode !== 'timeout-check') return;
+  if (!followUp || typeof followUp !== 'object') return;
 
-  const minDelay = Number(followUp.after_ms_min || 5000);
-  const maxDelay = Number(followUp.after_ms_max || minDelay);
-  const delay = Math.max(minDelay, Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay);
+  const mode = String(followUp.mode || '').trim().toLowerCase();
+  if (mode !== 'countdown-check' && mode !== 'timeout-check') return;
+
+  const durationSeconds = mode === 'countdown-check'
+    ? Math.max(1, Number(followUp.duration_seconds || 10))
+    : Math.max(1, Math.round(Number(followUp.after_ms_max || followUp.after_ms_min || 10000) / 1000));
+  const delay = durationSeconds * 1000;
   const timeoutMessage = String(followUp.message || '__contact_timeout__');
+  const preCountdownAnswer = String(followUp.pre_countdown_answer || 'Mohon tunggu 10 detik, saya cek ketersediaannya dulu.').trim();
 
   clearContactBusyFollowUp();
   const snapshotState = JSON.parse(JSON.stringify(contactFlowState || { stage: 'idle' }));
+  isContactCountdownActive = true;
+  stopAutoRecognition(false);
+  syncComposerState();
+
+  activateConversationLayout();
+  clearChat();
+  const countdownBubble = addBotBubble();
+  countdownBubble.textContent = `${preCountdownAnswer}\n\nHitung mundur: ${durationSeconds}`;
+  scrollChatToBottom();
+
+  let countdownValue = durationSeconds;
+  contactBusyCountdownInterval = setInterval(() => {
+    countdownValue -= 1;
+    if (countdownValue < 0) {
+      clearInterval(contactBusyCountdownInterval);
+      contactBusyCountdownInterval = null;
+      return;
+    }
+    countdownBubble.textContent = `${preCountdownAnswer}\n\nHitung mundur: ${countdownValue}`;
+    scrollChatToBottom();
+  }, 1000);
 
   contactBusyFollowUpTimer = setTimeout(async () => {
     try {
@@ -812,6 +847,8 @@ function scheduleContactBusyFollowUp(followUp) {
         scheduleConversationReset(40);
       }
     } catch (error) {
+    } finally {
+      clearContactBusyFollowUp();
     }
   }, delay);
 }
@@ -1125,7 +1162,7 @@ function updateMicState() {
   const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
 
   if (micBtn) {
-    micBtn.disabled = isSending || isAssistantResponding || isSpeaking;
+    micBtn.disabled = isSending || isAssistantResponding || isSpeaking || isContactCountdownActive;
   }
 
   updateAvatarState();

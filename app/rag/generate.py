@@ -1,4 +1,5 @@
 from typing import Iterator
+import re
 
 import requests
 
@@ -19,6 +20,13 @@ Jangan menyebut proses internal, prompt, retrieval, atau sistem di balik jawaban
 Gunakan bahasa yang mengikuti bahasa pengguna kecuali pengguna meminta bahasa lain.
 """
 
+FLOW_RESPONSE_SYSTEM_PROMPT = """Anda adalah virtual receptionist.
+Tugas Anda hanya merapikan respons backend menjadi kalimat natural yang sopan dan singkat.
+Jangan mengubah keputusan, status, atau aksi backend.
+Jangan menambahkan janji/aksi baru di luar data yang diberikan.
+Gunakan Bahasa Indonesia yang natural dan ringkas.
+"""
+
 
 def _ollama_generate_options(overrides: dict | None = None) -> dict:
     options = {
@@ -37,8 +45,31 @@ def _build_answer_style(question: str, context: str) -> str:
     return "Jawab secara jelas, runtut, dan secukupnya sesuai kebutuhan pengguna."
 
 
+def _wants_detailed_answer(question: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (question or "").lower()).strip()
+    if not normalized:
+        return False
+
+    detail_markers = (
+        "jelaskan",
+        "secara detail",
+        "lebih detail",
+        "rincikan",
+        "lengkap",
+        "terperinci",
+        "bagaimana cara",
+        "langkah",
+        "prosedur",
+        "alurnya",
+    )
+    return any(marker in normalized for marker in detail_markers)
+
+
 def _answer_options(question: str) -> dict:
-    return _ollama_generate_options({"num_predict": settings.ollama_num_predict_long})
+    target_num_predict = settings.ollama_num_predict_short
+    if _wants_detailed_answer(question):
+        target_num_predict = settings.ollama_num_predict_long
+    return _ollama_generate_options({"num_predict": target_num_predict})
 
 
 def _build_history_block(history: list[dict] | None = None) -> str:
@@ -248,3 +279,71 @@ def generate_answer_stream(question: str, context: str, history: list[dict] | No
 
         if not emitted:
             yield FALLBACK_MESSAGE
+
+
+def generate_contact_flow_response(
+    *,
+    seed_answer: str,
+    stage: str,
+    intent: str,
+    target_label: str,
+    status: str,
+) -> str:
+    base_answer = (seed_answer or "").strip()
+    if not base_answer:
+        return FALLBACK_MESSAGE
+
+    prompt = f"""Rapikan jawaban backend berikut agar natural untuk percakapan resepsionis.
+
+BATASAN WAJIB:
+- Pertahankan makna asli 100%.
+- Jangan menambah aksi baru, jangan ubah status proses.
+- Maksimal 2 kalimat, ringkas, sopan.
+- Jika ada aksi koneksi, gunakan pola: "menghubungkan Anda dengan ...".
+- Hindari pola yang tidak natural seperti "menghubungi Anda dengan ...".
+- Jangan mengubah siapa yang dihubungi.
+
+KONTEKS STATE:
+- stage: {stage or 'unknown'}
+- intent: {intent or 'unknown'}
+- target: {target_label or '-'}
+- status: {status or '-'}
+
+JAWABAN BACKEND ASLI:
+{base_answer}
+
+Keluarkan hanya teks jawaban akhir (tanpa bullet, tanpa markdown)."""
+
+    def _sanitize_flow_response(text: str) -> str:
+        value = (text or "").strip()
+        if not value:
+            return ""
+        value = re.sub(r"\bmenghubungi\s+Anda\s+dengan\b", "menghubungkan Anda dengan", value, flags=re.IGNORECASE)
+        value = re.sub(r"\bmenghubungi\s+anda\s+dengan\b", "menghubungkan Anda dengan", value, flags=re.IGNORECASE)
+        value = re.sub(r"\bsaya\s+akan\s+menghubungi\s+Anda\s+dengan\b", "Saya akan menghubungkan Anda dengan", value, flags=re.IGNORECASE)
+        return value
+
+    try:
+        response = _http_session.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_chat_model,
+                "prompt": prompt,
+                "system": FLOW_RESPONSE_SYSTEM_PROMPT,
+                "stream": False,
+                "keep_alive": "20m",
+                "options": _ollama_generate_options(
+                    {
+                        "temperature": 0.25,
+                        "num_predict": settings.ollama_num_predict_short,
+                    }
+                ),
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        rewritten = str((response.json() or {}).get("response", "") or "").strip()
+        sanitized = _sanitize_flow_response(rewritten)
+        return sanitized or base_answer
+    except Exception:
+        return _sanitize_flow_response(base_answer) or base_answer
