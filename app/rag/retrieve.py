@@ -1,5 +1,6 @@
 import re
 import logging
+import time
 from typing import Dict, List
 
 from config import settings
@@ -7,6 +8,10 @@ from rag.client import get_collection, embed_texts
 
 
 _logger = logging.getLogger(__name__)
+_collection_count_cache: dict[str, float | int] = {
+    "value": 0,
+    "expires_at": 0.0,
+}
 
 
 STOPWORDS = {
@@ -157,8 +162,20 @@ def _items_are_relevant(query: str, items: list[dict]) -> bool:
 
 def _candidate_count(collection) -> int:
     desired = max(settings.rag_top_k * 6, 12)
+    now = time.monotonic()
+    cached_value = int(_collection_count_cache.get("value") or 0)
+    cached_expiry = float(_collection_count_cache.get("expires_at") or 0.0)
+
+    if cached_value > 0 and cached_expiry > now:
+        total = max(settings.rag_top_k, cached_value)
+        if total <= 64:
+            return total
+        return min(desired, total)
+
     try:
         total = max(settings.rag_top_k, collection.count())
+        _collection_count_cache["value"] = int(total)
+        _collection_count_cache["expires_at"] = now + 45.0
         if total <= 64:
             return total
         return min(desired, total)

@@ -53,12 +53,12 @@ CONFUSED_MARKERS = (
     "hmm",
     "emm",
 )
-LEAVE_MESSAGE_MARKERS = (
-    "tinggalkan pesan",
-    "pesan saja",
-    "kirim pesan",
-    "titip pesan",
-)
+# LEAVE_MESSAGE_MARKERS = (
+#     "tinggalkan pesan",
+#     "pesan saja",
+#     "kirim pesan",
+#     "titip pesan",
+# )
 WAIT_MARKERS = (
     "saya tunggu",
     "menunggu",
@@ -576,6 +576,26 @@ def _format_employee_for_prompt(employee: dict) -> str:
     return f"{employee['nama']} dari {employee['departemen']}"
 
 
+def _format_employee_name_department(employee: dict) -> str:
+    return f"{employee['nama']} ({employee['departemen']})"
+
+
+def _build_cancel_contact_answer(selected: dict | None, target_kind: str, department: str) -> str:
+    if target_kind == "department" and department:
+        return (
+            f"Saya sudah membatalkan melanjutkan hubungi ke tim {department}. "
+            "Apakah ada yang bisa saya bantu lagi?"
+        )
+
+    if isinstance(selected, dict) and selected.get("nama") and selected.get("departemen"):
+        return (
+            f"Saya sudah membatalkan melanjutkan hubungi ke "
+            f"{selected['nama']} ({selected['departemen']}). Apakah ada yang bisa saya bantu lagi?"
+        )
+
+    return "Saya sudah membatalkan proses hubungi. Apakah ada yang bisa saya bantu lagi?"
+
+
 def _extract_person_name_input(message: str) -> str:
     value = (message or "").strip()
     if not value:
@@ -699,6 +719,12 @@ def _resolve_disambiguation_choice(message: str, candidates: list[dict]) -> dict
     for employee in candidates:
         name = _normalize_text(str(employee.get("nama", "")))
         department = _normalize_text(str(employee.get("departemen", "")))
+        if name and department and name in stripped and department in stripped:
+            return employee
+
+    for employee in candidates:
+        name = _normalize_text(str(employee.get("nama", "")))
+        department = _normalize_text(str(employee.get("departemen", "")))
         if name and name in stripped:
             return employee
         if department and department in stripped:
@@ -747,10 +773,24 @@ class ChatAppService:
         user_message = (message or "").strip()
         safe_flow_state = flow_state if isinstance(flow_state, dict) else {}
         stage = str(safe_flow_state.get("stage") or "idle").strip().lower()
+        is_active_stage = stage in {
+            "await_disambiguation",
+            "await_confirmation",
+            "contacting_unavailable_pending",
+            "await_unavailable_choice",
+            "await_waiter_name",
+            "await_message_name",
+            "await_message_goal",
+        }
         action = _detect_contact_action(user_message, safe_flow_state)
         base_context = _safe_flow_context(safe_flow_state)
 
-        semantic_intent = detect_conversation_intent(user_message, flow_state=safe_flow_state)
+        should_run_intent_llm = (not is_active_stage) and _is_contact_intent(user_message)
+        semantic_intent = detect_conversation_intent(
+            user_message,
+            flow_state=safe_flow_state,
+            allow_llm=should_run_intent_llm,
+        )
         flow_context = _update_flow_context_from_intent(base_context, semantic_intent, user_message)
 
         def _state(stage_name: str, **kwargs: Any) -> dict[str, Any]:
@@ -768,15 +808,6 @@ class ChatAppService:
                 "conversation_id": resolved_conversation_id,
             }
 
-        is_active_stage = stage in {
-            "await_disambiguation",
-            "await_confirmation",
-            "contacting_unavailable_pending",
-            "await_unavailable_choice",
-            "await_waiter_name",
-            "await_message_name",
-            "await_message_goal",
-        }
         semantic_contact_confidence = float(semantic_intent.get("confidence") or 0.0)
         semantic_target_type = str(semantic_intent.get("target_type") or "none").strip().lower()
         semantic_target_value = str(semantic_intent.get("target_value") or "").strip()
@@ -829,7 +860,7 @@ class ChatAppService:
 
             selected = _resolve_disambiguation_choice(user_message, candidates)
             if not selected:
-                option_names = [item["nama"] for item in candidates[:3] if item.get("nama")]
+                option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
                 answer = "Saya menemukan beberapa karyawan bernama serupa."
                 if len(option_names) == 1:
                     answer += f" Apakah {option_names[0]}?"
@@ -872,15 +903,15 @@ class ChatAppService:
                 if target_kind == "department" and department:
                     answer = (
                         f"Saat ini tim {department} sedang tidak tersedia. "
-                        "Apakah Anda ingin meninggalkan pesan atau saya arahkan ke front office untuk bantuan offline?"
+                        "Apakah Anda ingin meninggalkan pesan?"
                     )
                 else:
                     answer = (
                         f"{selected['nama']} sedang tidak tersedia saat ini. "
-                        "Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
-                        "lalu menuju ke lobby untuk menunggu. "
-                        "Jika perlu bantuan offline, silakan ke front office agar petugas membantu menghubungi langsung."
+                        f"Anda bisa tinggalkan pesan untuk {selected['nama']} "
+                        "Apakah anda ingin meninggalkan pesan?"
                     )
+
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
                     answer=answer,
@@ -919,7 +950,7 @@ class ChatAppService:
                 )
 
             if _is_confirmation_no(user_message):
-                answer = "Baik, saya batalkan. Silakan sebutkan lagi nama karyawan yang ingin dihubungi."
+                answer = _build_cancel_contact_answer(selected, target_kind, department)
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
                     answer=answer,
@@ -928,7 +959,10 @@ class ChatAppService:
                 )
 
             if not _is_confirmation_yes(user_message):
-                answer = "Mohon jawab dengan ya atau tidak untuk konfirmasi."
+                answer = (
+                    "silakan jawab terlebih dahulu, apakah anda ingin melanjutkan hubungi "
+                    f"{selected['nama']} ({selected['departemen']})?"
+                )
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
                     answer=answer,
@@ -970,6 +1004,11 @@ class ChatAppService:
                 follow_up={
                     "mode": "countdown-check",
                     "duration_seconds": 10,
+                    "countdown": {
+                        "start": 10,
+                        "end": 0,
+                        "show_icon": True,
+                    },
                     "pre_countdown_answer": "Mohon tunggu 10 detik, saya cek ketersediaannya dulu.",
                     "message": SYSTEM_CONTACT_TIMEOUT_TOKEN,
                 },
@@ -1003,6 +1042,33 @@ class ChatAppService:
                     ),
                 )
 
+            if _is_confirmation_yes(user_message):
+                answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
+                _store_chat_message(resolved_conversation_id, "assistant", answer)
+                return _build_contact_response(
+                    answer=answer,
+                    conversation_id=resolved_conversation_id,
+                    flow_state=_state(
+                        "await_message_name",
+                        action=action,
+                        selected=selected,
+                        target_kind=target_kind,
+                        department=department,
+                    ),
+                )
+
+            if _is_confirmation_no(user_message):
+                answer = (
+                    "Baik, Anda tidak meninggalkan pesan. "
+                    "Silakan menuju front office untuk bantuan lebih lanjut secara offline."
+                )
+                _store_chat_message(resolved_conversation_id, "assistant", answer)
+                return _build_contact_response(
+                    answer=answer,
+                    conversation_id=resolved_conversation_id,
+                    flow_state=_state("idle"),
+                )
+
             if _is_waiting_response(user_message):
                 answer = (
                     f"Baik, silakan sebutkan nama Anda. "
@@ -1021,12 +1087,18 @@ class ChatAppService:
                     ),
                 )
 
-            answer = (
-                "Jika ingin, Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
-                "lalu menuju ke lobby untuk menunggu. "
-                "Atau Anda juga bisa langsung bilang bahwa Anda menunggu di lobby. "
-                "Jika perlu bantuan offline, silakan ke front office agar petugas membantu menghubungi langsung."
-            )
+            if target_kind == "department" and department:
+                answer = (
+                    f"Saat ini tim {department} sedang tidak tersedia. "
+                    "Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
+                    "Apakah anda ingin meninggalkan pesan?"
+                )
+            else:
+                answer = (
+                    f"{selected['nama']} sedang tidak tersedia saat ini. "
+                    "Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
+                    "Apakah anda ingin meninggalkan pesan?"
+                )
             _store_chat_message(resolved_conversation_id, "assistant", answer)
             return _build_contact_response(
                 answer=answer,
@@ -1290,7 +1362,7 @@ class ChatAppService:
             )
 
         candidates = matches[:5]
-        option_names = [item["nama"] for item in candidates[:3] if item.get("nama")]
+        option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
         answer = "Saya menemukan beberapa karyawan bernama serupa."
         if option_names:
             if len(option_names) == 1:

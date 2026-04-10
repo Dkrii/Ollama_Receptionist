@@ -1,0 +1,131 @@
+{
+  "summary": {
+    "total": 10,
+    "ok_status": 10,
+    "quality_pass": 7,
+    "quality_fail": 3,
+    "avg_latency_ms": 1022.0
+  },
+  "rows": [
+    {
+      "id": "Q1",
+      "category": "company_profile",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2498.29,
+      "citations": 2,
+      "quality_pass": true,
+      "rule": "profil mention perusahaan",
+      "answer": "Visi perusahaan adalah menjadi Produsen Rem Global Nomor 1 di Asia dengan fokus pada keselamatan dan kualitas berdasarkan filosofi APS. AAIJ beroperasi di Vietnam melalui fasilitas yang didirikan bersama mitra joint vent"
+    },
+    {
+      "id": "Q2",
+      "category": "operational_hours",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2122.28,
+      "citations": 2,
+      "quality_pass": true,
+      "rule": "jam/operasional term",
+      "answer": "Jam operasional kantor kami adalah Senin sampai Jumat dari pukul 08.00 hingga 16.30 WIB."
+    },
+    {
+      "id": "Q3",
+      "category": "facility_layout",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2762.63,
+      "citations": 2,
+      "quality_pass": true,
+      "rule": "lokasi fasilitas term",
+      "answer": "Maaf, untuk informasi tentang mushola terletak di lantai apa tidak tersedia dalam konteks knowledge perusahaan yang saya miliki. Namun, biasanya mushola atau tempat ibadah umumnya tersedia di setiap gedung dan bisa ditem"
+    },
+    {
+      "id": "Q4",
+      "category": "safety",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2633.95,
+      "citations": 2,
+      "quality_pass": true,
+      "rule": "safety term",
+      "answer": "Darurat Anda bisa menghubungi bagian GA atau sekretaris divisi untuk mendapatkan titik kumpul yang tepat dan aman. Jika kontak tersebut tidak tersedia dalam knowledge perusahaan saya, silakan hubungi bagian GA atau sekre"
+    },
+    {
+      "id": "Q5",
+      "category": "contact_person",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 58.34,
+      "citations": 0,
+      "quality_pass": true,
+      "rule": "ditangani contact-flow",
+      "answer": "Tentu, apakah Anda ingin saya menghubungkan Anda dengan tim IT?"
+    },
+    {
+      "id": "Q6",
+      "category": "contact_department",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 22.76,
+      "citations": 0,
+      "quality_pass": true,
+      "rule": "ditangani contact-flow",
+      "answer": "Apakah Anda ingin meneruskan hubungi ke tim IT?"
+    },
+    {
+      "id": "Q7",
+      "category": "contact_reference",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 20.84,
+      "citations": 0,
+      "quality_pass": true,
+      "rule": "ditangani contact-flow",
+      "answer": "Apakah Anda ingin meneruskan hubungi ke tim IT?"
+    },
+    {
+      "id": "Q8",
+      "category": "employee_list",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 25.68,
+      "citations": 0,
+      "quality_pass": false,
+      "rule": "employee listing intent",
+      "answer": "Apakah Anda ingin meneruskan hubungi ke tim IT?"
+    },
+    {
+      "id": "Q9",
+      "category": "unknown_info",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 53.26,
+      "citations": 0,
+      "quality_pass": false,
+      "rule": "fallback/limitasi jelas",
+      "answer": "Apakah Anda ingin meneruskan hubungi ke tim IT?"
+    },
+    {
+      "id": "Q10",
+      "category": "small_talk",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 21.94,
+      "citations": 0,
+      "quality_pass": false,
+      "rule": "small talk response",
+      "answer": "Apakah Anda ingin meneruskan hubungi ke tim IT?"
+    }
+  ]
+}

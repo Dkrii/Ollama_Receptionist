@@ -1,0 +1,11 @@
+query_id,category,message,endpoint,status,handled,http_status,ttft_ms,total_ms,answer_chars,contact_probe_called
+Q1,company_profile,Profil singkat perusahaan ini apa?,chat-stream,ok,False,200,1425.4799000000276,2424.792499999967,237,False
+Q2,operational_hours,Jam operasional kantor hari kerja?,chat-stream,ok,False,200,1408.7276999998721,2347.9418999995687,179,False
+Q3,facility_layout,Mushola ada di lantai berapa?,chat-stream,ok,False,200,1425.4337000002124,2006.5399000004618,157,False
+Q4,safety,"Kalau keadaan darurat, titik kumpul di mana?",chat-stream,ok,False,200,1263.2924999998068,1721.5875000001688,84,False
+Q5,contact_person,Tolong hubungi Budi dari IT,contact-flow,ok,True,200,32.19689999968978,32.19689999968978,63,True
+Q6,contact_department,Saya mau ketemu tim HR,contact-flow,ok,True,200,24.613900000076683,24.613900000076683,47,True
+Q7,contact_reference,Bisa sambungkan ke orang yang ngurus itu?,contact-flow,ok,True,200,32.513899999685236,32.513899999685236,47,True
+Q8,employee_list,Siapa saja karyawan yang terdaftar?,contact-flow,ok,True,200,25.847300000350515,25.847300000350515,47,True
+Q9,unknown_info,Berapa harga produk yang dijual di sini?,contact-flow,ok,True,200,56.794999999510765,56.794999999510765,47,True
+Q10,small_talk,"Halo, bisa bantu saya?",contact-flow,ok,True,200,31.40739999980724,31.40739999980724,47,True

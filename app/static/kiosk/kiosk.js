@@ -235,7 +235,7 @@ function renderContactCountdown(currentSecond, totalSeconds) {
 
   const label = document.createElement('div');
   label.className = 'kiosk-countdown__label';
-  label.textContent = `Mohon tunggu ${currentSecond}/${totalSeconds} detik`;
+  label.textContent = `📞 Menghubungi... ${currentSecond}/${totalSeconds} detik`;
 
   wrap.appendChild(number);
   wrap.appendChild(label);
@@ -277,12 +277,12 @@ function scheduleContactBusyFollowUp(followUp) {
   updateMicState();
 
   const startCountdown = () => {
-    let currentSecond = 1;
+    let currentSecond = durationSeconds;
     renderContactCountdown(currentSecond, durationSeconds);
     setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
     contactBusyCountdownInterval = setInterval(() => {
-      currentSecond += 1;
-      if (currentSecond <= durationSeconds) {
+      currentSecond -= 1;
+      if (currentSecond >= 0) {
         renderContactCountdown(currentSecond, durationSeconds);
         setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
         return;
@@ -541,6 +541,37 @@ async function tryHandleEmployeeContactFlow(message) {
   return true;
 }
 
+function shouldProbeContactFlow(message) {
+  const activeStages = new Set([
+    'await_disambiguation',
+    'await_confirmation',
+    'contacting_unavailable_pending',
+    'await_unavailable_choice',
+    'await_waiter_name',
+    'await_message_name',
+    'await_message_goal'
+  ]);
+
+  const currentStage = String((contactFlowState && contactFlowState.stage) || 'idle').trim().toLowerCase();
+  if (activeStages.has(currentStage)) {
+    return true;
+  }
+
+  const normalized = String(message || '').toLowerCase().trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const markers = [
+    'hubungi', 'kontak', 'sambungkan', 'telepon', 'telpon', 'panggil',
+    'ketemu', 'bertemu', 'temui', 'menemui', 'jumpa',
+    'mau ngobrol', 'ingin ngobrol', 'mau bicara', 'ingin bicara',
+    'orangnya', 'orang itu', 'timnya', 'tim itu', 'yang ngurus', 'yang urus'
+  ];
+
+  return markers.some((marker) => normalized.includes(marker));
+}
+
 // Messaging Logic
 async function sendMessage(message) {
   if (isSending) return;
@@ -562,9 +593,11 @@ async function sendMessage(message) {
   let streamEventError = '';
 
   try {
-    const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
-    if (handledByContactFlow) {
-      return;
+    if (shouldProbeContactFlow(message)) {
+      const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
+      if (handledByContactFlow) {
+        return;
+      }
     }
 
     const response = await fetch('/api/chat/stream', {
@@ -652,6 +685,25 @@ async function sendMessage(message) {
 
 // STT Logic
 let micRecognition = null;
+let sttFinalTranscript = '';
+let sttInterimTranscript = '';
+let sttSubmitted = false;
+let sttStopRequested = false;
+
+function resetSttBuffers() {
+  sttFinalTranscript = '';
+  sttInterimTranscript = '';
+  sttSubmitted = false;
+  sttStopRequested = false;
+}
+
+function submitTranscriptIfAny() {
+  if (sttSubmitted) return;
+  const transcript = `${sttFinalTranscript} ${sttInterimTranscript}`.trim();
+  if (!transcript) return;
+  sttSubmitted = true;
+  sendMessage(transcript);
+}
 
 function setupSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -665,6 +717,7 @@ function setupSpeechRecognition() {
 
 function startRecording() {
   if (isSending || micRecognition || isContactCountdownActive) return;
+  resetSttBuffers();
   micRecognition = setupSpeechRecognition();
   if (!micRecognition) {
     alert('Speech recognition belum didukung browser ini.');
@@ -672,23 +725,36 @@ function startRecording() {
   }
 
   micRecognition.onresult = (event) => {
-    let finalTranscript = '';
+    sttInterimTranscript = '';
 
     for (let i = event.resultIndex; i < event.results.length; ++i) {
       if (event.results[i].isFinal) {
-        finalTranscript += event.results[i][0].transcript;
+        sttFinalTranscript += ` ${event.results[i][0].transcript}`;
+      } else {
+        sttInterimTranscript += ` ${event.results[i][0].transcript}`;
       }
     }
-    
-    // Auto-send when speech engine decides it's final
-    if (finalTranscript.trim() && event.results[event.results.length - 1].isFinal) {
-      sendMessage(finalTranscript);
-      try { micRecognition.stop(); } catch(e) {}
+
+    // Auto-send when engine already marks the latest chunk as final.
+    if (event.results[event.results.length - 1].isFinal) {
+      submitTranscriptIfAny();
+      try { micRecognition.stop(); } catch (e) {}
     }
   };
 
-  micRecognition.onerror = () => cleanupRecording();
-  micRecognition.onend = () => cleanupRecording();
+  micRecognition.onerror = (event) => {
+    const errorCode = String(event?.error || '').toLowerCase();
+    if (errorCode === 'aborted' && sttStopRequested) {
+      submitTranscriptIfAny();
+      cleanupRecording();
+      return;
+    }
+    cleanupRecording();
+  };
+  micRecognition.onend = () => {
+    submitTranscriptIfAny();
+    cleanupRecording();
+  };
 
   try {
     micRecognition.start();
@@ -706,13 +772,15 @@ function startRecording() {
 
 function stopRecording() {
   if (!micRecognition) return;
+  sttStopRequested = true;
   try { micRecognition.stop(); } catch (err) {}
-  cleanupRecording();
 }
 
 function cleanupRecording() {
   micBtn.classList.remove('is-recording');
   micRecognition = null;
+  sttInterimTranscript = '';
+  sttStopRequested = false;
   updateMicState();
 }
 

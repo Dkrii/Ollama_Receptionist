@@ -19,6 +19,10 @@ class Settings(BaseModel):
     chroma_host: str = os.getenv("CHROMA_HOST", "chroma")
     chroma_port: int = int(os.getenv("CHROMA_PORT", "8000"))
     chroma_collection: str = os.getenv("CHROMA_COLLECTION", "receptionist_kb")
+    chroma_hnsw_m: int = int(os.getenv("CHROMA_HNSW_M", "32"))
+    chroma_hnsw_construction_ef: int = int(os.getenv("CHROMA_HNSW_CONSTRUCTION_EF", "200"))
+    chroma_hnsw_search_ef: int = int(os.getenv("CHROMA_HNSW_SEARCH_EF", "80"))
+    chroma_hnsw_space: str = os.getenv("CHROMA_HNSW_SPACE", "cosine")
 
     rag_top_k: int = int(os.getenv("RAG_TOP_K", "2"))
     rag_score_threshold: float = float(os.getenv("RAG_SCORE_THRESHOLD", "0.0"))

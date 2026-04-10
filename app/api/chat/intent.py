@@ -356,12 +356,15 @@ Pesan pengguna:
     return dict(INTENT_FALLBACK)
 
 
-def detect_conversation_intent(message: str, flow_state: dict | None = None) -> dict:
+def detect_conversation_intent(message: str, flow_state: dict | None = None, allow_llm: bool = True) -> dict:
     heuristic = _heuristic_intent(message, flow_state=flow_state)
     if heuristic["intent"] in {"contact_employee", "company_info", "confirm_yes", "confirm_no"} and heuristic["confidence"] >= 0.7:
         return heuristic
 
     if heuristic["confidence"] >= 0.82:
+        return heuristic
+
+    if not allow_llm:
         return heuristic
 
     llm_result = _llm_intent(message, flow_state=flow_state)

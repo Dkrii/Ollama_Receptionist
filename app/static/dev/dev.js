@@ -18,9 +18,9 @@ const FACE_DETECTION_INTERVAL_MS = 180;
 const FACE_LOST_GRACE_MS = 1400;
 const GREETING_COOLDOWN_MS = 12000;
 const FACE_MATCH_THRESHOLD = 0.12;
-const VAD_BASE_THRESHOLD = 0.02;
-const VAD_DYNAMIC_MULTIPLIER = 2.2;
-const VAD_MAX_THRESHOLD = 0.045;
+const VAD_BASE_THRESHOLD = 0.004;
+const VAD_DYNAMIC_MULTIPLIER = 1.8;
+const VAD_MAX_THRESHOLD = 0.02;
 const VAD_CALIBRATION_MS = 2200;
 const VAD_SPEECH_START_MS = 240;
 const VAD_SILENCE_END_MS = 900;
@@ -55,6 +55,8 @@ let knownFaceProfiles = [];
 let faceCameraStream = null;
 let autoRecognition = null;
 let autoRecognitionActive = false;
+let recognitionStopRequested = false;
+let recognitionFatalBlockedUntil = 0;
 let recognitionFinalTranscript = '';
 let recognitionShouldSend = false;
 let recognitionSendTimer = null;
@@ -79,9 +81,12 @@ let lastVadRms = 0;
 let lastDebugRenderAt = 0;
 let contactFlowState = { stage: 'idle' };
 let contactBusyFollowUpTimer = null;
+let contactBusyCountdownStartTimer = null;
 let contactBusyCountdownInterval = null;
 let isContactCountdownActive = false;
 const DEBUG_REFRESH_MS = 180;
+const STT_FATAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);
+const STT_FATAL_RETRY_BLOCK_MS = 8000;
 
 function setFaceIndicatorState(statusClass, label) {
   if (!faceIndicator || !faceIndicatorText) return;
@@ -380,6 +385,7 @@ function setupAutoSpeechRecognition() {
 
 function startAutoRecognition() {
   if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive() || isContactCountdownActive) return;
+  if (Date.now() < recognitionFatalBlockedUntil) return;
 
   if (!autoRecognition) {
     autoRecognition = setupAutoSpeechRecognition();
@@ -409,12 +415,22 @@ function startAutoRecognition() {
 
     autoRecognition.onerror = (event) => {
       autoRecognitionActive = false;
-      lastSttError = String(event?.error || 'unknown');
+      const errorCode = String(event?.error || 'unknown').toLowerCase();
+      if (errorCode === 'aborted' && recognitionStopRequested) {
+        lastSttError = '-';
+        return;
+      }
+
+      lastSttError = errorCode;
+      if (STT_FATAL_ERROR_CODES.has(errorCode)) {
+        recognitionFatalBlockedUntil = Date.now() + STT_FATAL_RETRY_BLOCK_MS;
+      }
       renderRuntimeDebug(true);
     };
 
     autoRecognition.onend = async () => {
       autoRecognitionActive = false;
+      recognitionStopRequested = false;
       const shouldSend = recognitionShouldSend;
       recognitionShouldSend = false;
 
@@ -429,7 +445,7 @@ function startAutoRecognition() {
       updateAvatarState();
       renderRuntimeDebug(true);
 
-      if (isFacePresent && !isSending && !isAssistantResponding && !isSpeechActive()) {
+      if (isFacePresent && !isSending && !isAssistantResponding && !isSpeechActive() && Date.now() >= recognitionFatalBlockedUntil) {
         setTimeout(() => startAutoRecognition(), 250);
       }
     };
@@ -437,6 +453,7 @@ function startAutoRecognition() {
 
   recognitionFinalTranscript = '';
   recognitionShouldSend = false;
+  recognitionStopRequested = false;
 
   try {
     autoRecognition.start();
@@ -447,6 +464,7 @@ function startAutoRecognition() {
   } catch (error) {
     autoRecognitionActive = false;
     lastSttError = 'start-failed';
+    recognitionFatalBlockedUntil = Date.now() + STT_FATAL_RETRY_BLOCK_MS;
     renderRuntimeDebug(true);
   }
 }
@@ -454,6 +472,8 @@ function startAutoRecognition() {
 function stopAutoRecognition(shouldSend = true) {
   if (!autoRecognition || !autoRecognitionActive) return;
   recognitionShouldSend = shouldSend;
+  recognitionStopRequested = true;
+  lastSttError = '-';
   clearTimeout(recognitionSendTimer);
   try {
     autoRecognition.stop();
@@ -752,7 +772,9 @@ function appendConversationTurn(role, content) {
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
   clearTimeout(contactBusyFollowUpTimer);
+  clearTimeout(contactBusyCountdownStartTimer);
   clearInterval(contactBusyCountdownInterval);
+  contactBusyCountdownStartTimer = null;
   contactBusyCountdownInterval = null;
   isContactCountdownActive = false;
   conversationHistory = [];
@@ -763,7 +785,9 @@ function clearConversationState() {
 
 function clearContactBusyFollowUp() {
   clearTimeout(contactBusyFollowUpTimer);
+  clearTimeout(contactBusyCountdownStartTimer);
   contactBusyFollowUpTimer = null;
+  contactBusyCountdownStartTimer = null;
   clearInterval(contactBusyCountdownInterval);
   contactBusyCountdownInterval = null;
   isContactCountdownActive = false;
@@ -791,66 +815,74 @@ function scheduleContactBusyFollowUp(followUp) {
 
   activateConversationLayout();
   clearChat();
-  const countdownBubble = addBotBubble();
-  countdownBubble.textContent = `${preCountdownAnswer}\n\nHitung mundur: ${durationSeconds}`;
+  const preCountdownBubble = addBotBubble();
+  preCountdownBubble.textContent = preCountdownAnswer;
   scrollChatToBottom();
 
-  let countdownValue = durationSeconds;
-  contactBusyCountdownInterval = setInterval(() => {
-    countdownValue -= 1;
-    if (countdownValue < 0) {
-      clearInterval(contactBusyCountdownInterval);
-      contactBusyCountdownInterval = null;
-      return;
-    }
-    countdownBubble.textContent = `${preCountdownAnswer}\n\nHitung mundur: ${countdownValue}`;
+  contactBusyCountdownStartTimer = setTimeout(() => {
+    contactBusyCountdownStartTimer = null;
+
+    const countdownBubble = addBotBubble();
+    let countdownValue = durationSeconds;
+    countdownBubble.textContent = `Hitung mundur: ${countdownValue}`;
     scrollChatToBottom();
-  }, 1000);
 
-  contactBusyFollowUpTimer = setTimeout(async () => {
-    try {
-      const response = await fetch('/api/chat/contact-flow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: timeoutMessage,
-          conversation_id: activeConversationId || null,
-          history: buildRequestHistory(),
-          flow_state: snapshotState
-        })
-      });
-
-      if (!response.ok) return;
-      const data = await response.json();
-      setActiveConversationId(data.conversation_id || activeConversationId);
-
-      if (data.flow_state && typeof data.flow_state === 'object') {
-        contactFlowState = data.flow_state;
-      } else {
-        contactFlowState = { stage: 'idle' };
+    contactBusyCountdownInterval = setInterval(() => {
+      countdownValue -= 1;
+      if (countdownValue < 0) {
+        clearInterval(contactBusyCountdownInterval);
+        contactBusyCountdownInterval = null;
+        return;
       }
-
-      if (!data.handled) return;
-
-      const answer = String(data.answer || '').trim();
-      if (!answer) return;
-
-      activateConversationLayout();
-      clearChat();
-      const botBubble = addBotBubble();
-      botBubble.textContent = answer;
+      countdownBubble.textContent = `Hitung mundur: ${countdownValue}`;
       scrollChatToBottom();
-      appendConversationTurn('assistant', answer);
-      scheduleSessionIdleReset();
-      speakText(answer);
-      if (!window.speechSynthesis) {
-        scheduleConversationReset(40);
+    }, 1000);
+
+    contactBusyFollowUpTimer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/chat/contact-flow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: timeoutMessage,
+            conversation_id: activeConversationId || null,
+            history: buildRequestHistory(),
+            flow_state: snapshotState
+          })
+        });
+
+        if (!response.ok) return;
+        const data = await response.json();
+        setActiveConversationId(data.conversation_id || activeConversationId);
+
+        if (data.flow_state && typeof data.flow_state === 'object') {
+          contactFlowState = data.flow_state;
+        } else {
+          contactFlowState = { stage: 'idle' };
+        }
+
+        if (!data.handled) return;
+
+        const answer = String(data.answer || '').trim();
+        if (!answer) return;
+
+        activateConversationLayout();
+        clearChat();
+        const botBubble = addBotBubble();
+        botBubble.textContent = answer;
+        scrollChatToBottom();
+        appendConversationTurn('assistant', answer);
+        scheduleSessionIdleReset();
+        speakText(answer);
+        if (!window.speechSynthesis) {
+          scheduleConversationReset(40);
+        }
+      } catch (error) {
+      } finally {
+        clearContactBusyFollowUp();
       }
-    } catch (error) {
-    } finally {
-      clearContactBusyFollowUp();
-    }
-  }, delay);
+    }, delay);
+  }, 0);
 }
 
 function scheduleSessionIdleReset() {
@@ -1370,6 +1402,37 @@ async function tryHandleEmployeeContactFlow(message) {
   return true;
 }
 
+function shouldProbeContactFlow(message) {
+  const activeStages = new Set([
+    'await_disambiguation',
+    'await_confirmation',
+    'contacting_unavailable_pending',
+    'await_unavailable_choice',
+    'await_waiter_name',
+    'await_message_name',
+    'await_message_goal'
+  ]);
+
+  const currentStage = String((contactFlowState && contactFlowState.stage) || 'idle').trim().toLowerCase();
+  if (activeStages.has(currentStage)) {
+    return true;
+  }
+
+  const normalized = String(message || '').toLowerCase().trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const markers = [
+    'hubungi', 'kontak', 'sambungkan', 'telepon', 'telpon', 'panggil',
+    'ketemu', 'bertemu', 'temui', 'menemui', 'jumpa',
+    'mau ngobrol', 'ingin ngobrol', 'mau bicara', 'ingin bicara',
+    'orangnya', 'orang itu', 'timnya', 'tim itu', 'yang ngurus', 'yang urus'
+  ];
+
+  return markers.some((marker) => normalized.includes(marker));
+}
+
 async function sendMessage(messageOverride = '') {
   if (isSending) return;
 
@@ -1400,10 +1463,12 @@ async function sendMessage(messageOverride = '') {
   renderDebugStats(null);
 
   try {
-    const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
-    if (handledByContactFlow) {
-      renderDebugStats(null);
-      return;
+    if (shouldProbeContactFlow(message)) {
+      const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
+      if (handledByContactFlow) {
+        renderDebugStats(null);
+        return;
+      }
     }
 
     const response = await fetch('/api/chat/stream', {

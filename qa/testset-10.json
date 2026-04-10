@@ -1,0 +1,52 @@
+[
+  {
+    "id": "Q1",
+    "category": "company_profile",
+    "message": "Profil singkat perusahaan ini apa?"
+  },
+  {
+    "id": "Q2",
+    "category": "operational_hours",
+    "message": "Jam operasional kantor hari kerja?"
+  },
+  {
+    "id": "Q3",
+    "category": "facility_layout",
+    "message": "Mushola ada di lantai berapa?"
+  },
+  {
+    "id": "Q4",
+    "category": "safety",
+    "message": "Kalau keadaan darurat, titik kumpul di mana?"
+  },
+  {
+    "id": "Q5",
+    "category": "contact_person",
+    "message": "Tolong hubungi Budi dari IT"
+  },
+  {
+    "id": "Q6",
+    "category": "contact_department",
+    "message": "Saya mau ketemu tim HR"
+  },
+  {
+    "id": "Q7",
+    "category": "contact_reference",
+    "message": "Bisa sambungkan ke orang yang ngurus itu?"
+  },
+  {
+    "id": "Q8",
+    "category": "employee_list",
+    "message": "Siapa saja karyawan yang terdaftar?"
+  },
+  {
+    "id": "Q9",
+    "category": "unknown_info",
+    "message": "Berapa harga produk yang dijual di sini?"
+  },
+  {
+    "id": "Q10",
+    "category": "small_talk",
+    "message": "Halo, bisa bantu saya?"
+  }
+]

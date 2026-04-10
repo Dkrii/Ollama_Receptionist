@@ -1,0 +1,121 @@
+{
+  "summary": {
+    "total": 10,
+    "ok_status": 10,
+    "quality_pass": 10,
+    "quality_fail": 0,
+    "avg_latency_ms": 1244.58
+  },
+  "rows": [
+    {
+      "id": "Q1",
+      "category": "company_profile",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2290.19,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Profil singkat perusahaan kami adalah sebagai produsen rem global nomor 1 di Asia, dengan fokus pada produk untuk sepeda motor. Kami berprioritas pada keselamatan dan kualitas berdasarkan filosofi APS. Kami telah beroper"
+    },
+    {
+      "id": "Q2",
+      "category": "operational_hours",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2329.31,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Jam operasional kantor kami adalah Senin sampai Jumat dari pukul 08.00 hingga 16.30 WIB. Kami memiliki klinik di Gedung Utama, Lantai 1 yang beroperasi pada jam-jam tersebut juga."
+    },
+    {
+      "id": "Q3",
+      "category": "facility_layout",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2174.81,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Maaf, informasi tentang mushola tidak tersedia dalam konteks knowledge perusahaan yang saya miliki. Saya sarankan untuk menghubungi bagian kebersihan atau penerangan gedung utama untuk mendapatkan detail tersebut."
+    },
+    {
+      "id": "Q4",
+      "category": "safety",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 1806.79,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Darurat bisa dihubungi pada ext. 119. Titik kumpulnya adalah gedung utama lantai 1, sebelah kanan lobby."
+    },
+    {
+      "id": "Q5",
+      "category": "contact_person",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 32.92,
+      "citations": 0,
+      "quality_pass": true,
+      "answer": "Tentu, apakah Anda ingin saya menghubungkan Anda dengan tim IT?"
+    },
+    {
+      "id": "Q6",
+      "category": "contact_department",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 69.12,
+      "citations": 0,
+      "quality_pass": true,
+      "answer": "Tentu, apakah Anda ingin saya menghubungkan Anda dengan tim HR?"
+    },
+    {
+      "id": "Q7",
+      "category": "contact_reference",
+      "endpoint": "contact-flow",
+      "handled": true,
+      "status": "ok",
+      "latency_ms": 47.32,
+      "citations": 0,
+      "quality_pass": true,
+      "answer": "Saya tidak menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya."
+    },
+    {
+      "id": "Q8",
+      "category": "employee_list",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 55.01,
+      "citations": 1,
+      "quality_pass": true,
+      "answer": "Berikut daftar karyawan yang terdaftar:\n1. Budi Hartono — IT, IT Support\n2. Budi Santoso — HR, Staff HR\n3. Farhan Abas — Informasi Teknologi, Karyawan\n4. Ibnu — IT, Karyawan\n5. Pak Eko — IT, Manager\n6. Pak Yudha — IT, Ma"
+    },
+    {
+      "id": "Q9",
+      "category": "unknown_info",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 2166.57,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Maaf, informasi tentang harga produk tidak tersedia dalam konteks knowledge perusahaan yang saya miliki. Kami fokus pada proses produksi dan manajemen kualitas. Anda bisa mencari informasi lebih lanjut di website resmi k"
+    },
+    {
+      "id": "Q10",
+      "category": "small_talk",
+      "endpoint": "chat",
+      "handled": false,
+      "status": "ok",
+      "latency_ms": 1473.73,
+      "citations": 2,
+      "quality_pass": true,
+      "answer": "Tentu saja, siapa saya yang bisa membantu Anda hari ini?"
+    }
+  ]
+}
