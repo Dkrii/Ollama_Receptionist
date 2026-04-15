@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from api.chat.schemas import ChatRequest, ContactFlowRequest
+from api.chat.schemas import ChatRequest
 from api.chat.service import ChatAppService
 
 
@@ -10,8 +10,6 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 @router.post("/chat")
 def chat(payload: ChatRequest):
-    if not payload.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
     return ChatAppService.ask(
         payload.message,
         conversation_id=payload.conversation_id,
@@ -22,8 +20,6 @@ def chat(payload: ChatRequest):
 
 @router.post("/chat/stream")
 def chat_stream(payload: ChatRequest):
-    if not payload.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
     return StreamingResponse(
         ChatAppService.ask_stream(
             payload.message,
@@ -36,9 +32,7 @@ def chat_stream(payload: ChatRequest):
 
 
 @router.post("/chat/contact-flow")
-def chat_contact_flow(payload: ContactFlowRequest):
-    if not payload.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
+def chat_contact_flow(payload: ChatRequest):
     return ChatAppService.handle_contact_flow(
         payload.message,
         conversation_id=payload.conversation_id,

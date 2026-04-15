@@ -30,17 +30,6 @@ App is served at `http://localhost:8000`. The `knowledge/` directory is volume-m
 | `POST /api/reindex`     | Rebuild ChromaDB from `knowledge/`  |
 | `GET /health`           | Liveness check                      |
 
-## Benchmarking / QA
-
-```bash
-# Run from repo root (app must be running)
-python qa/benchmark_chat.py --tag before   # baseline
-python qa/benchmark_chat.py --tag after    # after changes
-# Outputs: qa/results/benchmark-<tag>.json and .csv
-```
-
-Test queries are in `qa/testset-10.json`. Results include TTFT percentiles and contact-flow probing metrics.
-
 ## Rebuild ChromaDB manually (inside container)
 
 ```bash
@@ -62,7 +51,7 @@ FastAPI  (app/main.py)
     ├── ChatAppService    app/api/chat/service.py   — orchestrates every chat turn
     ├── AdminAppService   app/api/admin/service.py  — knowledge management
     └── WebPageService    app/api/web/service.py
-         ↓
+         ↓`
     Business logic
     ├── Intent detection  app/api/chat/intent.py    — contact vs. info intent
     ├── Contact flow      app/api/chat/service.py   — state machine (await_disambiguation → confirmation → …)
@@ -71,10 +60,10 @@ FastAPI  (app/main.py)
          ├── generate.py  — Ollama/OpenRouter answer generation
          └── ingest.py    — chunk + embed documents into ChromaDB
          ↓
-    External services
-    ├── Ollama            local LLM (chat + embeddings)
-    ├── ChromaDB          vector store (Docker service)
-    └── SQLite            conversation history  (runtime/chat.sqlite3)
+    External services`
+    ├── Ollama / OpenRouter   LLM + embeddings (controlled by AI_PROVIDER)
+    ├── ChromaDB              vector store (Docker service)
+    └── SQLite                conversation history  (runtime/chat.sqlite3)
 ```
 
 ### Request flow (chat turn)
@@ -95,17 +84,30 @@ Implemented as a `flow_state` dict threaded through `ChatAppService`.
 
 ## Configuration
 
-All tunables live in `.env` (see `.env.example`). Key ones:
+All tunables live in `.env` (see `.env.example`). `AI_PROVIDER` is the single switch that controls **both** chat and embedding.
 
-| Variable              | Default            | Effect                               |
-| --------------------- | ------------------ | ------------------------------------ |
-| `AI_PROVIDER`         | `ollama`           | `ollama` or `openrouter`             |
-| `OLLAMA_CHAT_MODEL`   | `qwen2.5:3b`       | Chat model                           |
-| `OLLAMA_EMBED_MODEL`  | `nomic-embed-text` | Embedding model                      |
-| `RAG_SCORE_THRESHOLD` | `0.72`             | Min cosine similarity to use context |
-| `RAG_TOP_K`           | `2`                | Chunks retrieved per query           |
-| `RAG_CHUNK_SIZE`      | `900`              | Characters per chunk                 |
-| `CHAT_RECENT_TURNS`   | `4`                | History turns sent to LLM            |
+**OpenRouter mode:**
+```env
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_CHAT_MODEL=openai/gpt-4o-mini
+OPENROUTER_EMBED_MODEL=openai/text-embedding-3-small  # default jika tidak diset
+```
+
+**Ollama mode (default):**
+```env
+AI_PROVIDER=ollama
+OLLAMA_CHAT_MODEL=qwen2.5:3b
+OLLAMA_EMBED_MODEL=nomic-embed-text
+```
+
+| Variable              | Default            | Effect                                        |
+| --------------------- | ------------------ | --------------------------------------------- |
+| `AI_PROVIDER`         | `ollama`           | `ollama` or `openrouter` — controls chat + embedding |
+| `RAG_SCORE_THRESHOLD` | `0.72`             | Min cosine similarity to use context          |
+| `RAG_TOP_K`           | `2`                | Chunks retrieved per query                    |
+| `RAG_CHUNK_SIZE`      | `900`              | Characters per chunk                          |
+| `CHAT_RECENT_TURNS`   | `4`                | History turns sent to LLM                     |
 
 Settings are loaded via Pydantic in `app/config.py` and injected as a singleton through FastAPI's lifespan.
 
@@ -115,4 +117,4 @@ Settings are loaded via Pydantic in `app/config.py` and injected as a singleton 
 - **Dependency injection via lifespan**: services and clients are constructed once in `app/main.py`'s lifespan context and injected into routes.
 - **AI client abstraction**: `app/ai_client.py` wraps both Ollama and OpenRouter behind a single interface; switch providers via `AI_PROVIDER` env var.
 - **Streaming**: `/api/chat/stream` returns NDJSON; generation functions in `app/rag/generate.py` have paired sync/stream variants.
-- **No test suite**: correctness is validated with the benchmark script in `qa/`.
+- **No test suite**: test secara manual via `/dev` interface atau `POST /api/chat`.

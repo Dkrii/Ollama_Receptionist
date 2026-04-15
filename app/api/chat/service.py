@@ -407,7 +407,7 @@ def _build_idle_flow_state(context: dict[str, str]) -> dict[str, Any]:
     }
 
 
-_EMPLOYEE_FUZZY_THRESHOLD = 0.0
+_EMPLOYEE_FUZZY_THRESHOLD = 0.28
 
 
 def _similarity(a: str, b: str) -> float:
@@ -716,6 +716,515 @@ def _perform_contact_action(employee: dict, action: str) -> dict[str, Any]:
     }
 
 
+def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {"stage": stage, "context": flow_context}
+    result.update(kwargs)
+    return result
+
+
+def _handle_await_disambiguation(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    candidates = safe_flow_state.get("candidates") or []
+    if not isinstance(candidates, list) or not candidates:
+        answer = "Pilihan kandidat sudah kedaluwarsa. Silakan sebutkan lagi siapa karyawan yang ingin dihubungi."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    selected = _resolve_disambiguation_choice(user_message, candidates)
+    if not selected:
+        option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
+        answer = "Saya menemukan beberapa karyawan bernama serupa."
+        if len(option_names) == 1:
+            answer += f" Apakah {option_names[0]}?"
+        elif len(option_names) == 2:
+            answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
+        elif len(option_names) >= 3:
+            answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
+        else:
+            answer += " Silakan sebutkan nama lengkap karyawan yang ingin dihubungi."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_disambiguation", action=action, candidates=candidates),
+        )
+
+    answer = f"Apakah Anda ingin menghubungi {_format_employee_for_prompt(selected)}?"
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("await_confirmation", action=action, selected=selected),
+    )
+
+
+def _handle_await_unavailable_choice(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi tidak tersedia berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    choice_decision = _classify_unavailable_choice_fast(user_message)
+    if choice_decision == "unknown":
+        choice_result = interpret_unavailable_choice(user_message, safe_flow_state)
+        choice_decision = str(choice_result.get("decision") or "unknown").strip().lower()
+
+    if choice_decision == "leave_message":
+        answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_message_name", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    if choice_decision == "decline":
+        answer = "Baik, Anda tidak meninggalkan pesan. Silakan menuju front office untuk bantuan lebih lanjut secara offline."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if choice_decision == "wait_in_lobby":
+        answer = (
+            f"Baik, silakan sebutkan nama Anda. "
+            f"Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
+        )
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_waiter_name", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    if target_kind == "department" and department:
+        answer = (
+            f"Saat ini tim {department} sedang tidak tersedia. "
+            "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
+        )
+    else:
+        answer = (
+            f"{selected['nama']} sedang tidak tersedia saat ini. "
+            "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
+        )
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("await_unavailable_choice", action=action, selected=selected, target_kind=target_kind, department=department),
+    )
+
+
+def _handle_contacting_unavailable_pending(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi panggilan berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if _normalize_text(user_message) == SYSTEM_CONTACT_TIMEOUT_TOKEN:
+        if target_kind == "department" and department:
+            answer = f"Saat ini tim {department} sedang tidak tersedia. Apakah Anda ingin meninggalkan pesan?"
+        else:
+            answer = (
+                f"{selected['nama']} sedang tidak tersedia saat ini. "
+                f"Anda bisa tinggalkan pesan untuk {selected['nama']} "
+                "Apakah anda ingin meninggalkan pesan?"
+            )
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_unavailable_choice", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    return _handle_await_unavailable_choice(ctx)
+
+
+def _handle_await_confirmation(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+    candidates = safe_flow_state.get("candidates") or []
+
+    if target_kind == "department" and (not isinstance(selected, dict) or not selected.get("id")):
+        if isinstance(candidates, list) and candidates:
+            selected = candidates[0]
+        elif department:
+            dept_matches = _search_employees_by_department(department)
+            selected = dept_matches[0] if dept_matches else {}
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi konfirmasi sudah berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    current_intent = _classify_confirmation_text(user_message)
+    if current_intent == "confirm_no":
+        answer = _build_cancel_contact_answer(selected, target_kind, department)
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if current_intent != "confirm_yes":
+        answer = (
+            "Silakan jawab terlebih dahulu, apakah Anda ingin melanjutkan hubungi "
+            f"{selected['nama']} ({selected['departemen']})?"
+        )
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_confirmation", action=action, selected=selected, target_kind=target_kind, department=department, candidates=candidates),
+        )
+
+    try:
+        action_result = _perform_contact_action(selected, action)
+    except Exception:
+        _logger.exception("chat.contact action dispatch failed")
+        answer = "Maaf, sistem belum berhasil memproses permintaan hubungi saat ini."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if target_kind == "department" and department:
+        answer = f"Baik, saya akan menghubungkan Anda dengan staf {department} yang tersedia. Sedang diproses, mohon tunggu 5-10 detik."
+    else:
+        answer = f"Baik, saya sedang menghubungi {selected['nama']}. Silakan tunggu 5-10 detik."
+
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("contacting_unavailable_pending", action=action, selected=selected, target_kind=target_kind, department=department),
+        action_result=action_result,
+        follow_up={
+            "mode": "countdown-check",
+            "duration_seconds": 10,
+            "countdown": {"start": 10, "end": 0, "show_icon": True},
+            "pre_countdown_answer": "Mohon tunggu 10 detik, saya cek ketersediaannya dulu.",
+            "message": SYSTEM_CONTACT_TIMEOUT_TOKEN,
+        },
+    )
+
+
+def _handle_await_waiter_name(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi menunggu berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    visitor_name = extract_visitor_name(user_message, safe_flow_state)
+    if not visitor_name:
+        answer = "Silakan sebutkan nama Anda terlebih dahulu."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_waiter_name", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    answer = f"Baik, {visitor_name}. Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+
+def _handle_await_message_name(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi pesan berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    visitor_name = extract_visitor_name(user_message, safe_flow_state)
+    if not visitor_name:
+        answer = "Mohon sebutkan nama Anda terlebih dahulu agar saya bisa mencatat pesannya."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_message_name", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    answer = f"Terima kasih, {visitor_name}. Sekarang mohon sampaikan tujuan atau keperluan Anda."
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("await_message_goal", action=action, selected=selected, target_kind=target_kind, department=department, visitor_name=visitor_name),
+    )
+
+
+def _handle_await_message_goal(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    safe_flow_state: dict = ctx["safe_flow_state"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    selected = safe_flow_state.get("selected") or {}
+    target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
+    department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
+    visitor_name = str(safe_flow_state.get("visitor_name") or "").strip()
+
+    if not isinstance(selected, dict) or not selected.get("id"):
+        answer = "Sesi pesan berakhir. Silakan ulangi permintaan hubungi karyawan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if not visitor_name:
+        answer = "Mohon sebutkan nama Anda terlebih dahulu sebelum menyampaikan tujuan."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_message_name", action=action, selected=selected, target_kind=target_kind, department=department),
+        )
+
+    visitor_goal = extract_visitor_goal(user_message, safe_flow_state)
+    if len(visitor_goal) < 5:
+        answer = "Tujuannya masih terlalu singkat. Mohon jelaskan tujuan Anda dengan lebih lengkap."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_message_goal", action=action, selected=selected, target_kind=target_kind, department=department, visitor_name=visitor_name),
+        )
+
+    stored_message: dict[str, Any] | None = None
+    try:
+        message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
+        stored_message = AdminRepository.create_contact_message(
+            employee_id=int(selected["id"]),
+            employee_nama=str(selected["nama"]),
+            employee_departemen=str(selected["departemen"]),
+            employee_nomor_wa=str(selected["nomor_wa"]),
+            visitor_name=visitor_name,
+            visitor_goal=visitor_goal,
+            message_text=message_content,
+            channel="whatsapp",
+            delivery_status="queued",
+            delivery_detail="Menunggu dispatcher WhatsApp.",
+            delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+        )
+        dispatch_result = dispatch_contact_message(
+            employee=selected,
+            visitor_name=visitor_name,
+            visitor_goal=visitor_goal,
+            message_text=message_content,
+        )
+        delivered_payload = AdminRepository.update_contact_message_delivery(
+            message_id=int(stored_message["id"]),
+            delivery_status=str(dispatch_result.get("status") or "sent"),
+            delivery_detail=str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
+            delivery_provider=str(dispatch_result.get("provider") or "dummy"),
+            provider_message_id=str(dispatch_result.get("provider_message_id") or ""),
+            provider_payload=dispatch_result.get("provider_payload"),
+            mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"sent", "sent_dummy"},
+        )
+    except Exception:
+        _logger.exception("chat.contact message dispatch failed")
+        if stored_message and stored_message.get("id"):
+            try:
+                AdminRepository.update_contact_message_delivery(
+                    message_id=int(stored_message["id"]),
+                    delivery_status="failed",
+                    delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
+                    delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+                    provider_payload={"error": "dispatch_failed"},
+                    mark_sent=False,
+                )
+            except Exception:
+                _logger.exception("chat.contact message failure update failed")
+        answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
+    if delivery_status in {"queued", "queued_dummy"}:
+        answer = (
+            f"Baik, pesan Anda untuk {selected['nama']} sudah dicatat dan sedang diproses. "
+            "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
+        )
+    else:
+        answer = (
+            f"Baik, pesan Anda untuk {selected['nama']} sudah terkirim. "
+            "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
+        )
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("idle"),
+        action_result={
+            "type": "notify",
+            "status": str((delivered_payload or {}).get("delivery_status") or "sent"),
+            "provider": str((delivered_payload or {}).get("delivery_provider") or "dummy"),
+            "employee": {
+                "id": selected["id"],
+                "nama": selected["nama"],
+                "departemen": selected["departemen"],
+                "jabatan": selected["jabatan"],
+            },
+            "message": delivered_payload,
+        },
+    )
+
+
+def _handle_new_contact_intent(ctx: dict) -> dict:
+    user_message: str = ctx["message"]
+    conversation_id: str | None = ctx["conversation_id"]
+    flow_context: dict = ctx["flow_context"]
+    action: str = ctx["action"]
+    semantic_intent: dict = ctx["semantic_intent"]
+
+    def _state(stage: str, **kw: Any) -> dict:
+        return _build_stage(stage, flow_context, **kw)
+
+    semantic_target_type = str(semantic_intent.get("target_type") or "none").strip().lower()
+    semantic_target_value = str(semantic_intent.get("target_value") or "").strip()
+    department_target = ""
+
+    if semantic_target_type == "department" and semantic_target_value:
+        department_target = _normalize_department_label(semantic_target_value)
+
+    if department_target:
+        dept_matches = _search_employees_by_department(department_target)
+        if not dept_matches:
+            answer = f"Saat ini saya belum menemukan staf terdaftar di tim {department_target}."
+            _store_chat_message(conversation_id, "assistant", answer)
+            return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+        selected = dept_matches[0]
+        answer = f"Tentu, apakah Anda ingin saya menghubungkan Anda dengan tim {department_target}?"
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_confirmation", action=action, target_kind="department", department=department_target, selected=selected, candidates=dept_matches[:5]),
+        )
+
+    if semantic_target_type == "person" and semantic_target_value:
+        search_query = semantic_target_value
+    else:
+        search_query = str(semantic_intent.get("search_phrase") or "").strip() or user_message
+    department_hint = (
+        str(semantic_intent.get("target_department") or "").strip()
+        or extract_department_from_text(user_message)
+        or ""
+    )
+    matches = _search_employees(search_query, department_hint=department_hint)
+
+    if not matches:
+        answer = "Saya tidak menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya."
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
+
+    if len(matches) == 1:
+        selected = matches[0]
+        answer = f"Apakah Anda ingin menghubungi {_format_employee_for_prompt(selected)}?"
+        _store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_state("await_confirmation", action=action, selected=selected, target_kind="person"),
+        )
+
+    candidates = matches[:5]
+    option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
+    answer = "Saya menemukan beberapa karyawan bernama serupa."
+    if option_names:
+        if len(option_names) == 1:
+            answer += f" Apakah {option_names[0]}?"
+        elif len(option_names) == 2:
+            answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
+        else:
+            answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
+    _store_chat_message(conversation_id, "assistant", answer)
+    return _build_contact_response(
+        answer=answer,
+        conversation_id=conversation_id,
+        flow_state=_state("await_disambiguation", action=action, candidates=candidates),
+    )
+
+
+_STAGE_HANDLERS: dict[str, Any] = {
+    "await_disambiguation":           _handle_await_disambiguation,
+    "await_confirmation":             _handle_await_confirmation,
+    "contacting_unavailable_pending": _handle_contacting_unavailable_pending,
+    "await_unavailable_choice":       _handle_await_unavailable_choice,
+    "await_waiter_name":              _handle_await_waiter_name,
+    "await_message_name":             _handle_await_message_name,
+    "await_message_goal":             _handle_await_message_goal,
+}
+
+
 class ChatAppService:
     @staticmethod
     def handle_contact_flow(
@@ -724,19 +1233,11 @@ class ChatAppService:
         history: list[dict] | None = None,
         flow_state: dict[str, Any] | None = None,
     ) -> dict:
-        resolved_conversation_id, _, _ = _resolve_chat_memory(conversation_id, history=history)
+        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(conversation_id, history=history)
         user_message = (message or "").strip()
         safe_flow_state = flow_state if isinstance(flow_state, dict) else {}
         stage = str(safe_flow_state.get("stage") or "idle").strip().lower()
-        is_active_stage = stage in {
-            "await_disambiguation",
-            "await_confirmation",
-            "contacting_unavailable_pending",
-            "await_unavailable_choice",
-            "await_waiter_name",
-            "await_message_name",
-            "await_message_goal",
-        }
+        is_active_stage = stage in _STAGE_HANDLERS
         base_context = _safe_flow_context(safe_flow_state)
         is_internal_timeout_event = (
             stage == "contacting_unavailable_pending"
@@ -772,22 +1273,14 @@ class ChatAppService:
         action = _resolve_contact_mode(semantic_intent, safe_flow_state)
         flow_context = _update_flow_context_from_intent(base_context, semantic_intent)
 
-        def _state(stage_name: str, **kwargs: Any) -> dict[str, Any]:
-            payload: dict[str, Any] = {
-                "stage": stage_name,
-                "context": flow_context,
-            }
-            payload.update(kwargs)
-            return payload
-
         if not user_message:
             return {
                 "handled": False,
                 "flow_state": _build_idle_flow_state(flow_context),
                 "conversation_id": resolved_conversation_id,
+                "history": prior_history,
             }
 
-        semantic_contact_confidence = float(semantic_intent.get("confidence") or 0.0)
         semantic_target_type = str(semantic_intent.get("target_type") or "none").strip().lower()
         semantic_target_value = str(semantic_intent.get("target_value") or "").strip()
         semantic_action = str(semantic_intent.get("action") or "none").strip().lower()
@@ -800,7 +1293,6 @@ class ChatAppService:
         )
         semantic_contact_has_resolved_candidate = False
         if semantic_contact_detected and semantic_action == "contact" and not semantic_contact_has_explicit_target:
-            # search_phrase sudah diekstrak dalam satu prompt intent — tidak perlu LLM call terpisah
             fallback_query = str(semantic_intent.get("search_phrase") or "").strip() or user_message
             fallback_matches = _search_employees(
                 fallback_query,
@@ -829,573 +1321,24 @@ class ChatAppService:
                 "handled": False,
                 "flow_state": _build_idle_flow_state(flow_context),
                 "conversation_id": resolved_conversation_id,
+                "history": prior_history,
             }
 
         if not is_internal_timeout_event:
             _store_chat_message(resolved_conversation_id, "user", user_message)
 
-        if stage == "await_disambiguation":
-            candidates = safe_flow_state.get("candidates") or []
-            if not isinstance(candidates, list) or not candidates:
-                answer = "Pilihan kandidat sudah kedaluwarsa. Silakan sebutkan lagi siapa karyawan yang ingin dihubungi."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            selected = _resolve_disambiguation_choice(user_message, candidates)
-            if not selected:
-                option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
-                answer = "Saya menemukan beberapa karyawan bernama serupa."
-                if len(option_names) == 1:
-                    answer += f" Apakah {option_names[0]}?"
-                elif len(option_names) == 2:
-                    answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
-                elif len(option_names) >= 3:
-                    answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
-                else:
-                    answer += " Silakan sebutkan nama lengkap karyawan yang ingin dihubungi."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("await_disambiguation", action=action, candidates=candidates),
-                )
-
-            answer = f"Apakah Anda ingin menghubungi {_format_employee_for_prompt(selected)}?"
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state("await_confirmation", action=action, selected=selected),
-            )
-
-        if stage == "contacting_unavailable_pending":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi panggilan berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            timeout_triggered = _normalize_text(user_message) == SYSTEM_CONTACT_TIMEOUT_TOKEN
-            if timeout_triggered:
-                if target_kind == "department" and department:
-                    answer = (
-                        f"Saat ini tim {department} sedang tidak tersedia. "
-                        "Apakah Anda ingin meninggalkan pesan?"
-                    )
-                else:
-                    answer = (
-                        f"{selected['nama']} sedang tidak tersedia saat ini. "
-                        f"Anda bisa tinggalkan pesan untuk {selected['nama']} "
-                        "Apakah anda ingin meninggalkan pesan?"
-                    )
-
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_unavailable_choice",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            stage = "await_unavailable_choice"
-
-        if stage == "await_confirmation":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            candidates = safe_flow_state.get("candidates") or []
-
-            if target_kind == "department" and (not isinstance(selected, dict) or not selected.get("id")):
-                if isinstance(candidates, list) and candidates:
-                    selected = candidates[0]
-                elif department:
-                    dept_matches = _search_employees_by_department(department)
-                    selected = dept_matches[0] if dept_matches else {}
-
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi konfirmasi sudah berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            current_intent = _classify_confirmation_text(user_message)
-            if current_intent == "confirm_no":
-                answer = _build_cancel_contact_answer(selected, target_kind, department)
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            if current_intent != "confirm_yes":
-                answer = (
-                    "Silakan jawab terlebih dahulu, apakah Anda ingin melanjutkan hubungi "
-                    f"{selected['nama']} ({selected['departemen']})?"
-                )
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_confirmation",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                        candidates=candidates,
-                    ),
-                )
-
-            try:
-                action_result = _perform_contact_action(selected, action)
-            except Exception:
-                _logger.exception("chat.contact action dispatch failed")
-                answer = "Maaf, sistem belum berhasil memproses permintaan hubungi saat ini."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-            if target_kind == "department" and department:
-                answer = (
-                    f"Baik, saya akan menghubungkan Anda dengan staf {department} yang tersedia. "
-                    "Sedang diproses, mohon tunggu 5-10 detik."
-                )
-            else:
-                answer = (
-                    f"Baik, saya sedang menghubungi {selected['nama']}. "
-                    "Silakan tunggu 5-10 detik."
-                )
-
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state(
-                    "contacting_unavailable_pending",
-                    action=action,
-                    selected=selected,
-                    target_kind=target_kind,
-                    department=department,
-                ),
-                action_result=action_result,
-                follow_up={
-                    "mode": "countdown-check",
-                    "duration_seconds": 10,
-                    "countdown": {
-                        "start": 10,
-                        "end": 0,
-                        "show_icon": True,
-                    },
-                    "pre_countdown_answer": "Mohon tunggu 10 detik, saya cek ketersediaannya dulu.",
-                    "message": SYSTEM_CONTACT_TIMEOUT_TOKEN,
-                },
-            )
-
-        if stage == "await_unavailable_choice":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi tidak tersedia berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            choice_decision = _classify_unavailable_choice_fast(user_message)
-            if choice_decision == "unknown":
-                choice_result = interpret_unavailable_choice(user_message, safe_flow_state)
-                choice_decision = str(choice_result.get("decision") or "unknown").strip().lower()
-
-            if choice_decision == "leave_message":
-                answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_message_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            if choice_decision == "decline":
-                answer = (
-                    "Baik, Anda tidak meninggalkan pesan. "
-                    "Silakan menuju front office untuk bantuan lebih lanjut secara offline."
-                )
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            if choice_decision == "wait_in_lobby":
-                answer = (
-                    f"Baik, silakan sebutkan nama Anda. "
-                    f"Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
-                )
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_waiter_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            if target_kind == "department" and department:
-                answer = (
-                    f"Saat ini tim {department} sedang tidak tersedia. "
-                    "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. "
-                    "Apa yang ingin Anda lakukan?"
-                )
-            else:
-                answer = (
-                    f"{selected['nama']} sedang tidak tersedia saat ini. "
-                    "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. "
-                    "Apa yang ingin Anda lakukan?"
-                )
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state(
-                    "await_unavailable_choice",
-                    action=action,
-                    selected=selected,
-                    target_kind=target_kind,
-                    department=department,
-                ),
-            )
-
-        if stage == "await_waiter_name":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi menunggu berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            visitor_name = extract_visitor_name(user_message, safe_flow_state)
-            if not visitor_name:
-                answer = "Silakan sebutkan nama Anda terlebih dahulu."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_waiter_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            answer = (
-                f"Baik, {visitor_name}. Saya akan menyampaikan kepada {selected['nama']} "
-                "bahwa Anda menunggu di lobby."
-            )
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state("idle"),
-            )
-
-        if stage == "await_message_name":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi pesan berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            visitor_name = extract_visitor_name(user_message, safe_flow_state)
-            if not visitor_name:
-                answer = "Mohon sebutkan nama Anda terlebih dahulu agar saya bisa mencatat pesannya."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_message_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            answer = f"Terima kasih, {visitor_name}. Sekarang mohon sampaikan tujuan atau keperluan Anda."
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state(
-                    "await_message_goal",
-                    action=action,
-                    selected=selected,
-                    target_kind=target_kind,
-                    department=department,
-                    visitor_name=visitor_name,
-                ),
-            )
-
-        if stage == "await_message_goal":
-            selected = safe_flow_state.get("selected") or {}
-            target_kind = str(safe_flow_state.get("target_kind") or "person").strip().lower()
-            department = _normalize_department_label(str(safe_flow_state.get("department") or ""))
-            visitor_name = str(safe_flow_state.get("visitor_name") or "").strip()
-            if not isinstance(selected, dict) or not selected.get("id"):
-                answer = "Sesi pesan berakhir. Silakan ulangi permintaan hubungi karyawan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "idle",
-                    ),
-                )
-
-            if not visitor_name:
-                answer = "Mohon sebutkan nama Anda terlebih dahulu sebelum menyampaikan tujuan."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_message_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            visitor_goal = extract_visitor_goal(user_message, safe_flow_state)
-            if len(visitor_goal) < 5:
-                answer = "Tujuannya masih terlalu singkat. Mohon jelaskan tujuan Anda dengan lebih lengkap."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_message_goal",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                        visitor_name=visitor_name,
-                    ),
-                )
-
-            stored_message: dict[str, Any] | None = None
-            try:
-                message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
-                stored_message = AdminRepository.create_contact_message(
-                    employee_id=int(selected["id"]),
-                    employee_nama=str(selected["nama"]),
-                    employee_departemen=str(selected["departemen"]),
-                    employee_nomor_wa=str(selected["nomor_wa"]),
-                    visitor_name=visitor_name,
-                    visitor_goal=visitor_goal,
-                    message_text=message_content,
-                    channel="whatsapp",
-                    delivery_status="queued",
-                    delivery_detail="Menunggu dispatcher WhatsApp.",
-                    delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
-                )
-                dispatch_result = dispatch_contact_message(
-                    employee=selected,
-                    visitor_name=visitor_name,
-                    visitor_goal=visitor_goal,
-                    message_text=message_content,
-                )
-                delivered_payload = AdminRepository.update_contact_message_delivery(
-                    message_id=int(stored_message["id"]),
-                    delivery_status=str(dispatch_result.get("status") or "sent"),
-                    delivery_detail=str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
-                    delivery_provider=str(dispatch_result.get("provider") or "dummy"),
-                    provider_message_id=str(dispatch_result.get("provider_message_id") or ""),
-                    provider_payload=dispatch_result.get("provider_payload"),
-                    mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"sent", "sent_dummy"},
-                )
-            except Exception:
-                _logger.exception("chat.contact message dispatch failed")
-                if stored_message and stored_message.get("id"):
-                    try:
-                        AdminRepository.update_contact_message_delivery(
-                            message_id=int(stored_message["id"]),
-                            delivery_status="failed",
-                            delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
-                            delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
-                            provider_payload={"error": "dispatch_failed"},
-                            mark_sent=False,
-                        )
-                    except Exception:
-                        _logger.exception("chat.contact message failure update failed")
-                answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
-            if delivery_status in {"queued", "queued_dummy"}:
-                answer = (
-                    f"Baik, pesan Anda untuk {selected['nama']} sudah dicatat dan sedang diproses. "
-                    "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
-                )
-            else:
-                answer = (
-                    f"Baik, pesan Anda untuk {selected['nama']} sudah terkirim. "
-                    "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
-                )
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state("idle"),
-                action_result={
-                    "type": "notify",
-                    "status": str((delivered_payload or {}).get("delivery_status") or "sent"),
-                    "provider": str((delivered_payload or {}).get("delivery_provider") or "dummy"),
-                    "employee": {
-                        "id": selected["id"],
-                        "nama": selected["nama"],
-                        "departemen": selected["departemen"],
-                        "jabatan": selected["jabatan"],
-                    },
-                    "message": delivered_payload,
-                },
-            )
-
-        semantic_target_type = str(semantic_intent.get("target_type") or "none").strip().lower()
-        semantic_target_value = str(semantic_intent.get("target_value") or "").strip()
-        department_target = ""
-
-        if semantic_target_type == "department" and semantic_target_value:
-            department_target = _normalize_department_label(semantic_target_value)
-
-        if department_target:
-            dept_matches = _search_employees_by_department(department_target)
-            if not dept_matches:
-                answer = f"Saat ini saya belum menemukan staf terdaftar di tim {department_target}."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
-            selected = dept_matches[0]
-            answer = f"Tentu, apakah Anda ingin saya menghubungkan Anda dengan tim {department_target}?"
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state(
-                    "await_confirmation",
-                    action=action,
-                    target_kind="department",
-                    department=department_target,
-                    selected=selected,
-                    candidates=dept_matches[:5],
-                ),
-            )
-
-        if semantic_target_type == "person" and semantic_target_value:
-            search_query = semantic_target_value
-        else:
-            # Gunakan search_phrase yang sudah ada di intent result — tanpa LLM call tambahan
-            search_query = str(semantic_intent.get("search_phrase") or "").strip() or user_message
-        department_hint = (
-            str(semantic_intent.get("target_department") or "").strip()
-            or extract_department_from_text(user_message)
-            or ""
-        )
-        matches = _search_employees(search_query, department_hint=department_hint)
-
-        if not matches:
-            answer = "Saya tidak menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya."
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state("idle"),
-            )
-
-        if len(matches) == 1:
-            selected = matches[0]
-            answer = f"Apakah Anda ingin menghubungi {_format_employee_for_prompt(selected)}?"
-            _store_chat_message(resolved_conversation_id, "assistant", answer)
-            return _build_contact_response(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=_state("await_confirmation", action=action, selected=selected, target_kind="person"),
-            )
-
-        candidates = matches[:5]
-        option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
-        answer = "Saya menemukan beberapa karyawan bernama serupa."
-        if option_names:
-            if len(option_names) == 1:
-                answer += f" Apakah {option_names[0]}?"
-            elif len(option_names) == 2:
-                answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
-            else:
-                answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
-        _store_chat_message(resolved_conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=resolved_conversation_id,
-            flow_state=_state("await_disambiguation", action=action, candidates=candidates),
-        )
+        ctx: dict[str, Any] = {
+            "message": user_message,
+            "conversation_id": resolved_conversation_id,
+            "safe_flow_state": safe_flow_state,
+            "flow_context": flow_context,
+            "action": action,
+            "semantic_intent": semantic_intent,
+        }
+        handler = _STAGE_HANDLERS.get(stage)
+        if handler:
+            return handler(ctx)
+        return _handle_new_contact_intent(ctx)
 
     @staticmethod
     def ask(
@@ -1425,10 +1368,8 @@ class ChatAppService:
                 payload["follow_up"] = contact_result["follow_up"]
             return payload
 
-        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(
-            contact_result.get("conversation_id") or conversation_id,
-            history=history,
-        )
+        resolved_conversation_id = contact_result.get("conversation_id")
+        prior_history: list[dict] = contact_result.get("history") or []
         try:
             _store_chat_message(resolved_conversation_id, "user", message)
 
@@ -1517,10 +1458,8 @@ class ChatAppService:
 
             return _contact_events()
 
-        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(
-            contact_result.get("conversation_id") or conversation_id,
-            history=history,
-        )
+        resolved_conversation_id = contact_result.get("conversation_id")
+        prior_history: list[dict] = contact_result.get("history") or []
 
         _store_chat_message(resolved_conversation_id, "user", message)
 

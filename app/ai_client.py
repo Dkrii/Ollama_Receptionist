@@ -9,7 +9,7 @@ from config import settings
 _http_session = requests.Session()
 
 
-def _provider() -> str:
+def _active_provider() -> str:
     provider = str(getattr(settings, "ai_provider", "ollama") or "ollama").strip().lower()
     return provider if provider in {"ollama", "openrouter"} else "ollama"
 
@@ -26,19 +26,19 @@ def _openrouter_headers() -> dict[str, str]:
     return headers
 
 
-def _resolve_chat_model() -> str:
-    if _provider() == "openrouter":
+def _chat_model() -> str:
+    if _active_provider() == "openrouter":
         return settings.openrouter_chat_model or settings.ollama_chat_model
     return settings.ollama_chat_model
 
 
-def _resolve_embed_model() -> str:
-    if _provider() == "openrouter":
-        return settings.openrouter_embed_model or settings.ollama_embed_model
+def _embed_model() -> str:
+    if _active_provider() == "openrouter":
+        return settings.openrouter_embed_model
     return settings.ollama_embed_model
 
 
-def _openrouter_base() -> str:
+def _openrouter_base_url() -> str:
     return settings.openrouter_base_url.rstrip("/")
 
 
@@ -51,14 +51,14 @@ def generate_text(
     max_tokens: int | None = None,
     timeout: int = 120,
 ) -> dict:
-    if _provider() == "openrouter":
+    if _active_provider() == "openrouter":
         messages: list[dict[str, str]] = []
         if system.strip():
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
         payload: dict = {
-            "model": _resolve_chat_model(),
+            "model": _chat_model(),
             "messages": messages,
             "temperature": temperature,
             "stream": stream,
@@ -68,7 +68,7 @@ def generate_text(
 
         if not stream:
             response = _http_session.post(
-                f"{_openrouter_base()}/chat/completions",
+                f"{_openrouter_base_url()}/chat/completions",
                 headers=_openrouter_headers(),
                 json=payload,
                 timeout=timeout,
@@ -107,7 +107,7 @@ def generate_text(
     response = _http_session.post(
         f"{settings.ollama_base_url}/api/generate",
         json={
-            "model": _resolve_chat_model(),
+            "model": _chat_model(),
             "prompt": prompt,
             "system": system,
             "stream": stream,
@@ -127,14 +127,14 @@ def stream_text_tokens(
     max_tokens: int | None = None,
     timeout: int = 120,
 ) -> Iterator[str]:
-    if _provider() == "openrouter":
+    if _active_provider() == "openrouter":
         messages: list[dict[str, str]] = []
         if system.strip():
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
         payload: dict = {
-            "model": _resolve_chat_model(),
+            "model": _chat_model(),
             "messages": messages,
             "temperature": temperature,
             "stream": True,
@@ -143,7 +143,7 @@ def stream_text_tokens(
             payload["max_tokens"] = max_tokens
 
         with _http_session.post(
-            f"{_openrouter_base()}/chat/completions",
+            f"{_openrouter_base_url()}/chat/completions",
             headers=_openrouter_headers(),
             json=payload,
             stream=True,
@@ -183,7 +183,7 @@ def stream_text_tokens(
     with _http_session.post(
         f"{settings.ollama_base_url}/api/generate",
         json={
-            "model": _resolve_chat_model(),
+            "model": _chat_model(),
             "prompt": prompt,
             "system": system,
             "stream": True,
@@ -206,13 +206,14 @@ def stream_text_tokens(
 
 def embed_text(text: str, timeout: int = 90) -> list[float]:
     value = (text or "").strip()
-    if _provider() == "openrouter":
+    if _active_provider() == "openrouter":
         response = _http_session.post(
-            f"{_openrouter_base()}/embeddings",
+            f"{_openrouter_base_url()}/embeddings",
             headers=_openrouter_headers(),
             json={
-                "model": _resolve_embed_model(),
+                "model": _embed_model(),
                 "input": value,
+                "dimensions": 768,  # match nomic-embed-text dimension
             },
             timeout=timeout,
         )
@@ -227,7 +228,7 @@ def embed_text(text: str, timeout: int = 90) -> list[float]:
     response = _http_session.post(
         f"{settings.ollama_base_url}/api/embeddings",
         json={
-            "model": _resolve_embed_model(),
+            "model": _embed_model(),
             "prompt": value,
             "keep_alive": "30m",
         },
@@ -239,9 +240,9 @@ def embed_text(text: str, timeout: int = 90) -> list[float]:
 
 
 def provider_health() -> dict[str, str | int]:
-    if _provider() == "openrouter":
+    if _active_provider() == "openrouter":
         response = _http_session.get(
-            f"{_openrouter_base()}/models",
+            f"{_openrouter_base_url()}/models",
             headers=_openrouter_headers(),
             timeout=8,
         )

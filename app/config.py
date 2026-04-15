@@ -12,7 +12,7 @@ class Settings(BaseModel):
     openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "").strip()
     openrouter_chat_model: str = os.getenv("OPENROUTER_CHAT_MODEL", "").strip()
-    openrouter_embed_model: str = os.getenv("OPENROUTER_EMBED_MODEL", "").strip()
+    openrouter_embed_model: str = os.getenv("OPENROUTER_EMBED_MODEL", "openai/text-embedding-3-small").strip()
     openrouter_site_url: str = os.getenv("OPENROUTER_SITE_URL", "").strip()
     openrouter_site_name: str = os.getenv("OPENROUTER_SITE_NAME", "").strip()
 

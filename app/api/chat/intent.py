@@ -3,8 +3,6 @@ import logging
 import re
 from typing import Any
 
-import requests
-
 from ai_client import generate_text
 from api.chat.department import KNOWN_DEPARTMENTS, extract_department_from_text, normalize_department
 from config import settings
@@ -86,7 +84,6 @@ _PERSON_REFERENCE_PATTERN = re.compile(r"\b(pak|bu|bapak|ibu|mas|mbak)\s+[a-z][a
 
 
 _logger = logging.getLogger(__name__)
-_http_session = requests.Session()
 
 
 def _normalize_message(message: str) -> str:
@@ -200,7 +197,7 @@ def _flow_prompt_context(flow_state: dict | None) -> dict[str, str]:
     }
 
 
-def _ollama_json(prompt: str) -> dict | None:
+def _llm_json(prompt: str) -> dict | None:
     max_retries = max(1, int(getattr(settings, "chat_intent_max_retries", 2)))
     timeout_seconds = max(8, int(getattr(settings, "chat_intent_timeout_seconds", 20) or 20))
     last_raw_response = ""
@@ -446,7 +443,7 @@ Pesan pengunjung:
 {normalized_message}
 """
 
-    parsed = _ollama_json(prompt)
+    parsed = _llm_json(prompt)
     result = _normalize_intent_payload(parsed)
     result = _post_correct_intent(normalized_message, result)
     return result
@@ -482,7 +479,7 @@ Pesan pengguna:
 {normalized_message}
 """
 
-    parsed = _ollama_json(prompt)
+    parsed = _llm_json(prompt)
     normalized = _normalize_search_payload(parsed)
     return normalized["search_phrase"]
 
@@ -515,7 +512,7 @@ Pesan pengguna:
 {normalized_message}
 """
 
-    parsed = _ollama_json(prompt)
+    parsed = _llm_json(prompt)
     normalized = _normalize_visitor_name_payload(parsed)
     return normalized["person_name"]
 
@@ -548,7 +545,7 @@ Pesan pengguna:
 {normalized_message}
 """
 
-    parsed = _ollama_json(prompt)
+    parsed = _llm_json(prompt)
     normalized = _normalize_visitor_goal_payload(parsed)
     return normalized["visitor_goal"]
 
@@ -582,5 +579,5 @@ Pesan pengguna:
 {normalized_message}
 """
 
-    parsed = _ollama_json(prompt)
+    parsed = _llm_json(prompt)
     return _normalize_unavailable_choice_payload(parsed)

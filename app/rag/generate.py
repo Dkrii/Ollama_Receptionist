@@ -23,21 +23,18 @@ Panduan:
 """
 
 
-def _ollama_generate_options(overrides: dict | None = None) -> dict:
+def _generate_options(overrides: dict | None = None) -> dict:
     options = {
         "temperature": 0.2,
         "num_predict": settings.ollama_num_predict,
-        "num_ctx": settings.ollama_num_ctx,
     }
-    if settings.ollama_num_thread > 0:
-        options["num_thread"] = settings.ollama_num_thread
     if overrides:
         options.update(overrides)
     return options
 
 
 def _answer_options() -> dict:
-    return _ollama_generate_options({
+    return _generate_options({
         "num_predict": settings.ollama_num_predict,
     })
 
