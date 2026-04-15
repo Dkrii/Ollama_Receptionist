@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from ai_client import generate_text
 from api.chat.department import KNOWN_DEPARTMENTS, extract_department_from_text, normalize_department
 from config import settings
 
@@ -206,23 +207,15 @@ def _ollama_json(prompt: str) -> dict | None:
 
     for attempt in range(1, max_retries + 1):
         try:
-            response = _http_session.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_chat_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "keep_alive": "20m",
-                    "options": {
-                        "temperature": 0.0,
-                        "num_predict": min(220, settings.ollama_num_predict_short + 80),
-                        "num_ctx": settings.ollama_num_ctx,
-                    },
-                },
+            payload = generate_text(
+                prompt=prompt,
+                system="",
+                stream=False,
+                temperature=0.0,
+                max_tokens=min(220, settings.ollama_num_predict_short + 80),
                 timeout=timeout_seconds,
             )
-            response.raise_for_status()
-            last_raw_response = str((response.json() or {}).get("response", "") or "")
+            last_raw_response = str((payload or {}).get("response", "") or "")
             parsed = _extract_json_object(last_raw_response)
             if isinstance(parsed, dict):
                 return parsed

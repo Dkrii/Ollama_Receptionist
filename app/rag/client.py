@@ -3,6 +3,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from functools import lru_cache
 
+from ai_client import embed_text
 from config import settings
 
 
@@ -45,15 +46,5 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 @lru_cache(maxsize=256)
 def _embed_text_cached(text: str) -> tuple[float, ...]:
-    response = _http_session.post(
-        f"{settings.ollama_base_url}/api/embeddings",
-        json={
-            "model": settings.ollama_embed_model,
-            "prompt": text,
-            "keep_alive": "30m",
-        },
-        timeout=90,
-    )
-    response.raise_for_status()
-    embedding = response.json().get("embedding") or []
+    embedding = embed_text(text, timeout=90)
     return tuple(float(value) for value in embedding)

@@ -7,6 +7,15 @@ class Settings(BaseModel):
     app_host: str = os.getenv("APP_HOST", "0.0.0.0")
     app_port: int = int(os.getenv("APP_PORT", "8000"))
 
+    ai_provider: str = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+
+    openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "").strip()
+    openrouter_chat_model: str = os.getenv("OPENROUTER_CHAT_MODEL", "").strip()
+    openrouter_embed_model: str = os.getenv("OPENROUTER_EMBED_MODEL", "").strip()
+    openrouter_site_url: str = os.getenv("OPENROUTER_SITE_URL", "").strip()
+    openrouter_site_name: str = os.getenv("OPENROUTER_SITE_NAME", "").strip()
+
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     ollama_chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:3b")
     ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")

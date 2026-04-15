@@ -1,11 +1,8 @@
 from typing import Iterator
 
-import requests
-
+from ai_client import generate_text, stream_text_tokens
 from config import settings
 
-
-_http_session = requests.Session()
 
 FALLBACK_MESSAGE = "Maaf, saya belum bisa memberikan jawaban saat ini."
 
@@ -151,20 +148,15 @@ def _finalize(answer: str) -> str:
 
 
 def generate_answer(question: str, context: str, history=None, grounding_note: str = "") -> str:
-    response = _http_session.post(
-        f"{settings.ollama_base_url}/api/generate",
-        json={
-            "model": settings.ollama_chat_model,
-            "prompt": _build_prompt(question, context, history, grounding_note),
-            "system": SYSTEM_PROMPT,
-            "stream": False,
-            "options": _answer_options(),
-        },
+    options = _answer_options()
+    payload = generate_text(
+        prompt=_build_prompt(question, context, history, grounding_note),
+        system=SYSTEM_PROMPT,
+        stream=False,
+        temperature=float(options.get("temperature", 0.2)),
+        max_tokens=int(options.get("num_predict") or 0),
         timeout=120,
     )
-
-    response.raise_for_status()
-    payload = response.json()
 
     answer = (payload.get("response", "") or "").strip()
     done_reason = str(payload.get("done_reason", "") or "").strip().lower()
@@ -177,34 +169,18 @@ def generate_answer(question: str, context: str, history=None, grounding_note: s
 
 
 def generate_answer_stream(question: str, context: str, history=None, grounding_note: str = "") -> Iterator[str]:
-    with _http_session.post(
-        f"{settings.ollama_base_url}/api/generate",
-        json={
-            "model": settings.ollama_chat_model,
-            "prompt": _build_prompt(question, context, history, grounding_note),
-            "system": SYSTEM_PROMPT,
-            "stream": True,
-            "options": _answer_options(),
-        },
-        stream=True,
+    options = _answer_options()
+    emitted = False
+    for token in stream_text_tokens(
+        prompt=_build_prompt(question, context, history, grounding_note),
+        system=SYSTEM_PROMPT,
+        temperature=float(options.get("temperature", 0.2)),
+        max_tokens=int(options.get("num_predict") or 0),
         timeout=120,
-    ) as response:
-        response.raise_for_status()
-        emitted = False
+    ):
+        if token:
+            emitted = True
+            yield token
 
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-
-            chunk = requests.models.complexjson.loads(line)
-            token = chunk.get("response", "")
-
-            if token:
-                emitted = True
-                yield token
-
-            if chunk.get("done"):
-                break
-
-        if not emitted:
-            yield FALLBACK_MESSAGE
+    if not emitted:
+        yield FALLBACK_MESSAGE

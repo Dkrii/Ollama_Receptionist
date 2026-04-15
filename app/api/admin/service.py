@@ -5,6 +5,7 @@ import shutil
 import requests
 from fastapi import UploadFile
 
+from ai_client import provider_health
 from config import settings
 from rag.client import get_chroma_client, get_collection
 from rag.ingest import ingest_knowledge
@@ -122,21 +123,19 @@ class AdminAppService:
         )
 
         try:
-            response = requests.get(f"{settings.ollama_base_url}/api/tags", timeout=5)
-            response.raise_for_status()
-            models = response.json().get("models", [])
+            ai_status = provider_health()
             services.append(
                 {
-                    "name": "ollama",
+                    "name": str(ai_status.get("provider") or "ai"),
                     "label": "Active",
                     "status": "active",
-                    "detail": f"Model terdeteksi: {len(models)}",
+                    "detail": f"Provider: {ai_status.get('label')} | Model terdeteksi: {int(ai_status.get('model_count') or 0)}",
                 }
             )
         except Exception as exc:
             services.append(
                 {
-                    "name": "ollama",
+                    "name": "ai",
                     "label": "Warning",
                     "status": "warning",
                     "detail": f"Tidak tersambung: {exc}",
