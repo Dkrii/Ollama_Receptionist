@@ -80,10 +80,6 @@ let lastSttError = '-';
 let lastVadRms = 0;
 let lastDebugRenderAt = 0;
 let contactFlowState = { stage: 'idle' };
-let contactBusyFollowUpTimer = null;
-let contactBusyCountdownStartTimer = null;
-let contactBusyCountdownInterval = null;
-let isContactCountdownActive = false;
 const DEBUG_REFRESH_MS = 180;
 const STT_FATAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);
 const STT_FATAL_RETRY_BLOCK_MS = 8000;
@@ -361,7 +357,7 @@ function scheduleRecognitionSend() {
 }
 
 function syncAutoRecognitionState() {
-  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive() || isContactCountdownActive) {
+  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive()) {
     stopAutoRecognition(false);
     return;
   }
@@ -384,7 +380,7 @@ function setupAutoSpeechRecognition() {
 }
 
 function startAutoRecognition() {
-  if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive() || isContactCountdownActive) return;
+  if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive()) return;
   if (Date.now() < recognitionFatalBlockedUntil) return;
 
   if (!autoRecognition) {
@@ -771,27 +767,10 @@ function appendConversationTurn(role, content) {
 
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
-  clearTimeout(contactBusyFollowUpTimer);
-  clearTimeout(contactBusyCountdownStartTimer);
-  clearInterval(contactBusyCountdownInterval);
-  contactBusyCountdownStartTimer = null;
-  contactBusyCountdownInterval = null;
-  isContactCountdownActive = false;
   conversationHistory = [];
   contactFlowState = { stage: 'idle' };
   clearStoredConversationState();
   activeConversationId = '';
-}
-
-function clearContactBusyFollowUp() {
-  clearTimeout(contactBusyFollowUpTimer);
-  clearTimeout(contactBusyCountdownStartTimer);
-  contactBusyFollowUpTimer = null;
-  contactBusyCountdownStartTimer = null;
-  clearInterval(contactBusyCountdownInterval);
-  contactBusyCountdownInterval = null;
-  isContactCountdownActive = false;
-  syncComposerState();
 }
 
 function waitForSpeechPlaybackToFinish(onDone) {
@@ -810,111 +789,6 @@ function waitForSpeechPlaybackToFinish(onDone) {
       onDone();
     }
   }, 120);
-}
-
-function scheduleContactBusyFollowUp(followUp) {
-  if (!followUp || typeof followUp !== 'object') return;
-
-  const mode = String(followUp.mode || '').trim().toLowerCase();
-  if (mode !== 'countdown-check' && mode !== 'timeout-check') return;
-
-  const durationSeconds = mode === 'countdown-check'
-    ? Math.max(1, Number(followUp.duration_seconds || 10))
-    : Math.max(1, Math.round(Number(followUp.after_ms_max || followUp.after_ms_min || 10000) / 1000));
-  const delay = durationSeconds * 1000;
-  const timeoutMessage = String(followUp.message || '__contact_timeout__');
-  const preCountdownAnswer = String(followUp.pre_countdown_answer || 'Mohon tunggu 10 detik, saya cek ketersediaannya dulu.').trim();
-
-  clearContactBusyFollowUp();
-  const snapshotState = JSON.parse(JSON.stringify(contactFlowState || { stage: 'idle' }));
-  isContactCountdownActive = true;
-  stopAutoRecognition(false);
-  syncComposerState();
-
-  const startCountdown = () => {
-    contactBusyCountdownStartTimer = null;
-
-    const countdownBubble = addBotBubble();
-    let countdownValue = durationSeconds;
-    countdownBubble.textContent = `Hitung mundur: ${countdownValue}`;
-    scrollChatToBottom();
-
-    contactBusyCountdownInterval = setInterval(() => {
-      countdownValue -= 1;
-      if (countdownValue < 0) {
-        clearInterval(contactBusyCountdownInterval);
-        contactBusyCountdownInterval = null;
-        return;
-      }
-      countdownBubble.textContent = `Hitung mundur: ${countdownValue}`;
-      scrollChatToBottom();
-    }, 1000);
-
-    contactBusyFollowUpTimer = setTimeout(async () => {
-      try {
-        const response = await fetch('/api/chat/contact-flow', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: timeoutMessage,
-            conversation_id: activeConversationId || null,
-            history: buildRequestHistory(),
-            flow_state: snapshotState
-          })
-        });
-
-        if (!response.ok) return;
-        const data = await response.json();
-        setActiveConversationId(data.conversation_id || activeConversationId);
-
-        if (data.flow_state && typeof data.flow_state === 'object') {
-          contactFlowState = data.flow_state;
-        } else {
-          contactFlowState = { stage: 'idle' };
-        }
-
-        if (!data.handled) return;
-
-        const answer = String(data.answer || '').trim();
-        if (!answer) return;
-
-        activateConversationLayout();
-        clearChat();
-        const botBubble = addBotBubble();
-        botBubble.textContent = answer;
-        scrollChatToBottom();
-        appendConversationTurn('assistant', answer);
-        scheduleSessionIdleReset();
-        speakText(answer);
-        if (!window.speechSynthesis) {
-          scheduleConversationReset(40);
-        }
-      } catch (error) {
-      } finally {
-        clearContactBusyFollowUp();
-      }
-    }, delay);
-  };
-
-  const startCountdownSequence = () => {
-    if (preCountdownAnswer) {
-      activateConversationLayout();
-      const preCountdownBubble = addBotBubble();
-      preCountdownBubble.textContent = preCountdownAnswer;
-      scrollChatToBottom();
-      appendConversationTurn('assistant', preCountdownAnswer);
-      speakText(preCountdownAnswer, {
-        onEnd: () => {
-          contactBusyCountdownStartTimer = setTimeout(startCountdown, 0);
-        }
-      });
-      return;
-    }
-
-    contactBusyCountdownStartTimer = setTimeout(startCountdown, 0);
-  };
-
-  waitForSpeechPlaybackToFinish(startCountdownSequence);
 }
 
 function scheduleSessionIdleReset() {
@@ -1226,7 +1100,7 @@ function updateMicState() {
   const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
 
   if (micBtn) {
-    micBtn.disabled = isSending || isAssistantResponding || isSpeaking || isContactCountdownActive;
+    micBtn.disabled = isSending || isAssistantResponding || isSpeaking;
   }
 
   updateAvatarState();
@@ -1356,54 +1230,6 @@ async function renderBotMessageWordByWord(message) {
   scheduleConversationReset(40);
 }
 
-async function sendMessageNonStream(message, thinkingNode = null) {
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      conversation_id: activeConversationId || null,
-      history: buildRequestHistory(),
-      flow_state: contactFlowState || { stage: 'idle' }
-    })
-  });
-
-  if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
-
-  const data = await response.json();
-  const answer = data.answer || 'Terjadi kesalahan saat memproses pertanyaan.';
-  setActiveConversationId(data.conversation_id || activeConversationId);
-  if (data.flow_state && typeof data.flow_state === 'object') {
-    contactFlowState = data.flow_state;
-  } else {
-    contactFlowState = { stage: 'idle' };
-  }
-  if (contactFlowState.stage !== 'contacting_unavailable_pending') {
-    clearContactBusyFollowUp();
-  }
-  activateConversationLayout();
-  clearChat();
-  const botBubble = addBotBubble();
-  botBubble.textContent = answer;
-
-  if (thinkingNode && thinkingNode.isConnected) {
-    thinkingNode.remove();
-  }
-
-  appendConversationTurn('user', message);
-  appendConversationTurn('assistant', answer);
-  scheduleSessionIdleReset();
-  scrollChatToBottom();
-  speakText(answer);
-  if (!window.speechSynthesis) {
-    scheduleConversationReset(40);
-  }
-  if (data.follow_up && typeof data.follow_up === 'object') {
-    scheduleContactBusyFollowUp(data.follow_up);
-  }
-  renderDebugStats(null);
-}
-
 async function sendMessage(messageOverride = '') {
   if (isSending) return;
 
@@ -1424,11 +1250,9 @@ async function sendMessage(messageOverride = '') {
   resetSpeechQueue();
 
   const thinkingNode = null;
-  let streamStarted = false;
   let botBubble = null;
   let finalAnswer = '';
   let streamEventError = '';
-  let pendingFollowUp = null;
 
   const startTime = performance.now();
   let firstTokenTime = null;
@@ -1450,8 +1274,6 @@ async function sendMessage(messageOverride = '') {
     if (!response.body || typeof response.body.getReader !== 'function') {
       throw new Error('Stream tidak tersedia');
     }
-
-    streamStarted = true;
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -1483,12 +1305,7 @@ async function sendMessage(messageOverride = '') {
           } else {
             contactFlowState = { stage: 'idle' };
           }
-          if (contactFlowState.stage !== 'contacting_unavailable_pending') {
-            clearContactBusyFollowUp();
-          }
           scheduleSessionIdleReset();
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
@@ -1533,8 +1350,6 @@ async function sendMessage(messageOverride = '') {
           } else {
             contactFlowState = { stage: 'idle' };
           }
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         } else if (event.type === 'citations') {
           console.debug('Sumber RAG:', event.value || []);
         }
@@ -1578,9 +1393,6 @@ async function sendMessage(messageOverride = '') {
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
     scheduleSessionIdleReset();
-    if (pendingFollowUp) {
-      scheduleContactBusyFollowUp(pendingFollowUp);
-    }
   } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());
     const fallbackMessage = 'Terjadi kesalahan saat memproses pertanyaan.';
@@ -1591,14 +1403,6 @@ async function sendMessage(messageOverride = '') {
       }
       flushSpeechRemainder();
       return;
-    }
-
-    if (!streamStarted) {
-      try {
-        await sendMessageNonStream(message, thinkingNode);
-        return;
-      } catch (fallbackError) {
-      }
     }
 
     resetSpeechQueue();

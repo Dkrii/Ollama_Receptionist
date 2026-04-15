@@ -1,13 +1,9 @@
-import requests
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from functools import lru_cache
 
 from ai_client import embed_text
 from config import settings
-
-
-_http_session = requests.Session()
 
 
 @lru_cache(maxsize=1)

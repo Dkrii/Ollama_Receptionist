@@ -115,7 +115,6 @@ document.addEventListener('DOMContentLoaded', init3D);
 // --- END THREE JS ---
 
 const subtitlesBox = document.getElementById('subtitlesBox');
-const countdownBox = document.getElementById('countdownBox');
 const micBtn = document.getElementById('micBtn');
 const micHint = document.getElementById('micHint');
 const systemStatus = document.getElementById('systemStatus');
@@ -131,9 +130,6 @@ let conversationHistory = [];
 let sessionIdleTimer = null;
 let activeConversationId = '';
 let contactFlowState = { stage: 'idle' };
-let contactBusyFollowUpTimer = null;
-let contactBusyCountdownInterval = null;
-let isContactCountdownActive = false;
 
 function isStorageAvailable() {
   return typeof window.sessionStorage !== 'undefined';
@@ -197,10 +193,6 @@ function appendConversationTurn(role, content) {
 
 function clearConversationState() {
   clearTimeout(sessionIdleTimer);
-  clearTimeout(contactBusyFollowUpTimer);
-  clearInterval(contactBusyCountdownInterval);
-  contactBusyCountdownInterval = null;
-  isContactCountdownActive = false;
   conversationHistory = [];
   contactFlowState = { stage: 'idle' };
   clearStoredConversationState();
@@ -208,141 +200,8 @@ function clearConversationState() {
   updateMicState();
 }
 
-function clearContactBusyFollowUp() {
-  clearTimeout(contactBusyFollowUpTimer);
-  contactBusyFollowUpTimer = null;
-  clearInterval(contactBusyCountdownInterval);
-  contactBusyCountdownInterval = null;
-  isContactCountdownActive = false;
-  if (countdownBox) {
-    countdownBox.innerHTML = '';
-    countdownBox.hidden = true;
-  }
-  updateMicState();
-}
 
-function renderContactCountdown(currentSecond, totalSeconds) {
-  if (!countdownBox) return;
-  countdownBox.hidden = false;
-  countdownBox.innerHTML = '';
 
-  const wrap = document.createElement('div');
-  wrap.className = 'kiosk-countdown';
-
-  const number = document.createElement('div');
-  number.className = 'kiosk-countdown__number';
-  number.textContent = String(currentSecond);
-
-  const label = document.createElement('div');
-  label.className = 'kiosk-countdown__label';
-  label.textContent = `📞 Menghubungi... ${currentSecond}/${totalSeconds} detik`;
-
-  wrap.appendChild(number);
-  wrap.appendChild(label);
-  countdownBox.appendChild(wrap);
-}
-
-function waitForCurrentSpeechToFinish(onDone) {
-  if (!window.speechSynthesis) {
-    onDone();
-    return;
-  }
-
-  const startedAt = Date.now();
-  const maxWaitMs = 20000;
-
-  const intervalId = setInterval(() => {
-    const stillSpeaking = isSpeakingQueue || window.speechSynthesis.speaking || window.speechSynthesis.pending;
-    if (!stillSpeaking || (Date.now() - startedAt) >= maxWaitMs) {
-      clearInterval(intervalId);
-      onDone();
-    }
-  }, 120);
-}
-
-function scheduleContactBusyFollowUp(followUp) {
-  if (!followUp || followUp.mode !== 'countdown-check') return;
-
-  const durationSeconds = Math.max(1, Number(followUp.duration_seconds || 10));
-  const delay = durationSeconds * 1000;
-  const timeoutMessage = String(followUp.message || '__contact_timeout__');
-  const preCountdownAnswer = String(followUp.pre_countdown_answer || '').trim();
-
-  clearContactBusyFollowUp();
-  const snapshotState = JSON.parse(JSON.stringify(contactFlowState || { stage: 'idle' }));
-  isContactCountdownActive = true;
-  if (micRecognition) {
-    stopRecording();
-  }
-  updateMicState();
-
-  const startCountdown = () => {
-    let currentSecond = durationSeconds;
-    renderContactCountdown(currentSecond, durationSeconds);
-    setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
-    contactBusyCountdownInterval = setInterval(() => {
-      currentSecond -= 1;
-      if (currentSecond >= 0) {
-        renderContactCountdown(currentSecond, durationSeconds);
-        setThinkingStatus(`Menghubungi karyawan... ${currentSecond}/${durationSeconds}`);
-        return;
-      }
-      clearInterval(contactBusyCountdownInterval);
-      contactBusyCountdownInterval = null;
-    }, 1000);
-
-    contactBusyFollowUpTimer = setTimeout(async () => {
-      try {
-        const response = await fetch('/api/chat/contact-flow', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: timeoutMessage,
-            conversation_id: activeConversationId || null,
-            history: buildRequestHistory(),
-            flow_state: snapshotState
-          })
-        });
-
-        if (!response.ok) return;
-        const data = await response.json();
-        setActiveConversationId(data.conversation_id || activeConversationId);
-
-        if (data.flow_state && typeof data.flow_state === 'object') {
-          contactFlowState = data.flow_state;
-        } else {
-          contactFlowState = { stage: 'idle' };
-        }
-
-        if (!data.handled) return;
-
-        const answer = String(data.answer || '').trim();
-        if (!answer) return;
-
-        setSubtitle(answer, 'bot');
-        appendConversationTurn('assistant', answer);
-        scheduleSessionIdleReset();
-        speakText(answer);
-      } catch (error) {
-      } finally {
-        clearContactBusyFollowUp();
-      }
-    }, delay);
-  };
-
-  const startAfterCurrentSpeech = () => {
-    if (preCountdownAnswer) {
-      setSubtitle(preCountdownAnswer, 'bot');
-      appendConversationTurn('assistant', preCountdownAnswer);
-      speakText(preCountdownAnswer, { onEnd: startCountdown });
-      return;
-    }
-
-    startCountdown();
-  };
-
-  waitForCurrentSpeechToFinish(startAfterCurrentSpeech);
-}
 
 function scheduleSessionIdleReset() {
   clearTimeout(sessionIdleTimer);
@@ -382,10 +241,6 @@ setThinkingStatus();
 // Subtitle updates
 function setSubtitle(text, role = 'bot') {
   setThinkingStatus();
-  if (countdownBox) {
-    countdownBox.innerHTML = '';
-    countdownBox.hidden = true;
-  }
   subtitlesBox.innerHTML = '';
   const span = document.createElement('span');
   span.className = `kiosk-subtitle__text kiosk-subtitle__text--${role}`;
@@ -394,10 +249,6 @@ function setSubtitle(text, role = 'bot') {
 }
 
 function setThinking() {
-  if (countdownBox) {
-    countdownBox.innerHTML = '';
-    countdownBox.hidden = true;
-  }
   subtitlesBox.innerHTML = `
     <span class="kiosk-typing-indicator" aria-label="Berpikir...">
        <span class="kiosk-dot"></span>
@@ -412,10 +263,10 @@ function setThinking() {
 function updateMicState() {
   const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
   if (micBtn) {
-    micBtn.disabled = isSending || isSpeaking || isContactCountdownActive;
+    micBtn.disabled = isSending || isSpeaking;
   }
   if (micHint) {
-    micHint.textContent = isContactCountdownActive ? 'Mohon tunggu, sedang menghubungi...' : 'Tahan untuk bicara';
+    micHint.textContent = 'Tahan untuk bicara';
   }
 }
 
@@ -517,7 +368,6 @@ async function sendMessage(message) {
   
   let finalAnswer = '';
   let streamEventError = '';
-  let pendingFollowUp = null;
 
   try {
     const response = await fetch('/api/chat/stream', {
@@ -569,12 +419,7 @@ async function sendMessage(message) {
           } else {
             contactFlowState = { stage: 'idle' };
           }
-          if (contactFlowState.stage !== 'contacting_unavailable_pending') {
-            clearContactBusyFollowUp();
-          }
           scheduleSessionIdleReset();
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           if (token) {
@@ -602,8 +447,6 @@ async function sendMessage(message) {
           } else {
             contactFlowState = { stage: 'idle' };
           }
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         }
       } catch (parseError) {}
     }
@@ -618,9 +461,6 @@ async function sendMessage(message) {
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
     scheduleSessionIdleReset();
-    if (pendingFollowUp) {
-      scheduleContactBusyFollowUp(pendingFollowUp);
-    }
   } catch (err) {
     const fallback = 'Terjadi kesalahan sistem, mohon coba lagi.';
     setSubtitle(fallback, 'error');
@@ -666,7 +506,7 @@ function setupSpeechRecognition() {
 }
 
 function startRecording() {
-  if (isSending || micRecognition || isContactCountdownActive) return;
+  if (isSending || micRecognition) return;
   resetSttBuffers();
   micRecognition = setupSpeechRecognition();
   if (!micRecognition) {

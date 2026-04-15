@@ -4,21 +4,11 @@ import time
 from typing import Any
 
 from api.chat.utils import store_chat_message
-from rag.generate import generate_answer, generate_answer_stream
+from rag.generate import generate_answer_stream
 from rag.retrieve import retrieve_context
 
 _logger = logging.getLogger(__name__)
 CHAT_SYSTEM_FALLBACK = "Maaf, sistem sedang mengalami gangguan. Silakan coba lagi sebentar."
-
-
-def _build_answer_payload(answer: str, citations: list[dict], conversation_id: str | None) -> dict:
-    payload = {
-        "answer": answer,
-        "citations": citations,
-    }
-    if conversation_id:
-        payload["conversation_id"] = conversation_id
-    return payload
 
 
 def _build_retrieval_result(message: str, history: list[dict]) -> tuple[dict, float]:
@@ -68,63 +58,6 @@ def _should_fallback_to_unknown(retrieval: dict[str, Any]) -> bool:
     top_coverage = float(support.get("top_coverage") or 0.0)
     top_bigram_coverage = float(support.get("top_bigram_coverage") or 0.0)
     return grounding == "low" and top_coverage <= 0.05 and top_bigram_coverage <= 0.0
-
-
-def ask(
-    message: str,
-    conversation_id: str | None,
-    history: list[dict] | None,
-    flow_state: dict[str, Any] | None = None,
-) -> dict:
-    started_at = time.perf_counter()
-    prior_history = history or []
-
-    try:
-        store_chat_message(conversation_id, "user", message)
-
-        retrieval, retrieval_ms = _build_retrieval_result(message, prior_history)
-
-        if _should_fallback_to_unknown(retrieval):
-            answer = "Maaf, saya belum menemukan informasi pastinya di knowledge yang tersedia."
-            store_chat_message(conversation_id, "assistant", answer)
-            payload = _build_answer_payload(answer, retrieval["citations"], conversation_id)
-            payload["handled"] = False
-            payload["flow_state"] = flow_state or {"stage": "idle"}
-            return payload
-
-        answer_started_at = time.perf_counter()
-        answer = generate_answer(
-            message,
-            retrieval["context"],
-            history=prior_history,
-            grounding_note=_build_grounding_note(retrieval),
-        )
-        answer_ms = (time.perf_counter() - answer_started_at) * 1000
-        store_chat_message(conversation_id, "assistant", answer)
-
-        elapsed_ms = (time.perf_counter() - started_at) * 1000
-        _logger.info(
-            "chat.ask route=rag conversation_id=%s retrieval_ms=%.1f answer_ms=%.1f total_ms=%.1f",
-            conversation_id,
-            retrieval_ms,
-            answer_ms,
-            elapsed_ms,
-        )
-        payload = _build_answer_payload(answer, retrieval["citations"], conversation_id)
-        payload["handled"] = False
-        payload["flow_state"] = flow_state or {"stage": "idle"}
-        return payload
-    except Exception:
-        elapsed_ms = (time.perf_counter() - started_at) * 1000
-        _logger.exception(
-            "chat.ask route=rag failed conversation_id=%s total_ms=%.1f",
-            conversation_id,
-            elapsed_ms,
-        )
-        payload = _build_answer_payload(CHAT_SYSTEM_FALLBACK, [], conversation_id)
-        payload["handled"] = False
-        payload["flow_state"] = flow_state or {"stage": "idle"}
-        return payload
 
 
 def ask_stream(

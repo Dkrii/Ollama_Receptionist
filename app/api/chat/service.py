@@ -2,60 +2,10 @@ import json
 from typing import Any
 
 from api.chat.flows.contact import handle_contact_flow
-from api.chat.flows.rag import ask as ask_rag
-from api.chat.flows.rag import ask_stream as ask_rag_stream
+from api.chat.flows.qa import ask_stream as ask_rag_stream
 
 
 class ChatAppService:
-    @staticmethod
-    def handle_contact_flow(
-        message: str,
-        conversation_id: str | None = None,
-        history: list[dict] | None = None,
-        flow_state: dict[str, Any] | None = None,
-    ) -> dict:
-        return handle_contact_flow(
-            message,
-            conversation_id=conversation_id,
-            history=history,
-            flow_state=flow_state,
-        )
-
-    @staticmethod
-    def ask(
-        message: str,
-        conversation_id: str | None = None,
-        history: list[dict] | None = None,
-        flow_state: dict[str, Any] | None = None,
-    ) -> dict:
-        contact_result = ChatAppService.handle_contact_flow(
-            message,
-            conversation_id=conversation_id,
-            history=history,
-            flow_state=flow_state,
-        )
-        if contact_result.get("handled"):
-            payload = {
-                "answer": str(contact_result.get("answer") or "").strip(),
-                "citations": [],
-                "handled": True,
-                "flow_state": contact_result.get("flow_state") or {"stage": "idle"},
-            }
-            if contact_result.get("conversation_id"):
-                payload["conversation_id"] = contact_result["conversation_id"]
-            if contact_result.get("action"):
-                payload["action"] = contact_result["action"]
-            if contact_result.get("follow_up"):
-                payload["follow_up"] = contact_result["follow_up"]
-            return payload
-
-        return ask_rag(
-            message,
-            conversation_id=contact_result.get("conversation_id"),
-            history=contact_result.get("history") or [],
-            flow_state=contact_result.get("flow_state") or {"stage": "idle"},
-        )
-
     @staticmethod
     def ask_stream(
         message: str,
@@ -63,7 +13,7 @@ class ChatAppService:
         history: list[dict] | None = None,
         flow_state: dict[str, Any] | None = None,
     ):
-        contact_result = ChatAppService.handle_contact_flow(
+        contact_result = handle_contact_flow(
             message,
             conversation_id=conversation_id,
             history=history,
