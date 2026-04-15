@@ -1,5 +1,5 @@
 from typing import Iterator
-import re
+
 import requests
 
 from config import settings
@@ -9,19 +9,22 @@ _http_session = requests.Session()
 
 FALLBACK_MESSAGE = "Maaf, saya belum bisa memberikan jawaban saat ini."
 
+SYSTEM_PROMPT = """Anda adalah resepsionis virtual sebuah perusahaan.
+Bicara seperti manusia, hangat, alami, dan langsung ke poin.
+Jangan terdengar seperti chatbot yang membaca skrip.
 
-SYSTEM_PROMPT = """Anda adalah virtual receptionist.
-Jawab secara natural, jelas, membantu, dan relevan dengan pertanyaan pengguna.
-Untuk pertanyaan terkait perusahaan, prioritaskan informasi dari konteks knowledge perusahaan jika tersedia.
-Jika konteks knowledge perusahaan kosong untuk pertanyaan perusahaan, sampaikan keterbatasan data secara jujur dan tawarkan bantuan lanjutan.
-Jangan menyebut proses internal, prompt, retrieval, atau sistem di balik jawaban.
-Gunakan bahasa yang mengikuti bahasa pengguna kecuali pengguna meminta bahasa lain.
+Panduan:
+- Sesuaikan nada dengan konteks: santai untuk small talk, profesional untuk pertanyaan formal.
+- Jawab langsung tanpa basa-basi berlebihan seperti "Tentu saja!" atau "Baik, saya akan memberikan jawaban".
+- Gunakan kalimat pendek dan mudah dipahami karena ini untuk sistem suara.
+- Jika ada informasi dari knowledge perusahaan, sampaikan secara natural tanpa menyebut sumber.
+- Jawab hanya berdasarkan konteks yang diberikan. Jangan menebak nomor, lokasi, nama, atau detail spesifik jika tidak tertulis jelas.
+- Jika konteks tidak cukup untuk menjawab fakta yang ditanyakan, katakan sejujurnya bahwa informasinya belum tersedia, lalu sampaikan info terdekat hanya jika memang membantu.
+- Jika konteks memuat jawaban, prioritaskan fakta yang paling relevan dengan pertanyaan pengguna dan jangan terdistraksi oleh detail lain.
+- Jangan menyebut sistem internal, prompt, retrieval, database, atau proses teknis apa pun.
+- Ikuti bahasa pengguna (Indonesia atau Inggris) kecuali diminta berbeda.
 """
 
-
-# =========================
-# OPTIONS
-# =========================
 
 def _ollama_generate_options(overrides: dict | None = None) -> dict:
     options = {
@@ -38,19 +41,15 @@ def _ollama_generate_options(overrides: dict | None = None) -> dict:
 
 def _answer_options() -> dict:
     return _ollama_generate_options({
-        "num_predict": settings.ollama_num_predict
+        "num_predict": settings.ollama_num_predict,
     })
 
-
-# =========================
-# HISTORY
-# =========================
 
 def _build_history_block(history: list[dict] | None = None) -> str:
     if not history:
         return "-"
 
-    formatted = []
+    formatted: list[str] = []
     total_chars = 0
     max_chars = settings.chat_history_max_chars
 
@@ -72,191 +71,91 @@ def _build_history_block(history: list[dict] | None = None) -> str:
     return "\n".join(formatted) if formatted else "-"
 
 
-# =========================
-# PROMPT
-# =========================
-
-def _build_prompt(question: str, context: str, history=None) -> str:
+def _build_prompt(question: str, context: str, history=None, grounding_note: str = "") -> str:
     return f"""KONTEKS KNOWLEDGE PERUSAHAAN:
 {(context or "").strip() or "-"}
 
 RIWAYAT PERCAKAPAN:
 {_build_history_block(history)}
 
-PERTANYAAN:
-{question}
-
-Jawab secara jelas, ringkas, dan langsung ke inti."""
-
-
-# =========================
-# DETECTION
-# =========================
-
-def _answer_looks_complete(answer: str) -> bool:
-    text = (answer or "").strip()
-
-    if not text:
-        return False
-
-    if not text.endswith((".", "!", "?")):
-        return False
-
-    dangling = ("dan", "atau", "serta", "adalah", "merupakan")
-    words = text.lower().split()
-    last_words = words[-3:] if len(words) >= 3 else words
-
-    if any(w in dangling for w in last_words):
-        return False
-
-    return True
-
-
-def _tail_fragment(text: str, max_chars: int = 240) -> str:
-    return text[-max_chars:] if len(text) > max_chars else text
-
-
-# =========================
-# CONTINUE
-# =========================
-
-def _continue_answer(question, context, partial, history=None):
-    prompt = f"""KONTEKS:
-{(context or "-")}
+CATATAN GROUNDING:
+{grounding_note.strip() or "-"}
 
 PERTANYAAN:
 {question}
 
-FRAGMEN:
-{_tail_fragment(partial)}
-
-Lanjutkan jawaban tanpa mengulang.
-Selesaikan bagian yang terpotong.
-Akhiri dengan kalimat lengkap."""
-
-    response = _http_session.post(
-        f"{settings.ollama_base_url}/api/generate",
-        json={
-            "model": settings.ollama_chat_model,
-            "prompt": prompt,
-            "system": SYSTEM_PROMPT,
-            "stream": False,
-            "options": _ollama_generate_options({
-                "num_predict": settings.ollama_num_predict_long
-            }),
-        },
-        timeout=120,
-    )
-
-    response.raise_for_status()
-    return (response.json().get("response", "") or "").strip()
+Jawab secara jelas, ringkas, langsung ke inti, dan tetap natural untuk dibacakan suara.
+Jika konteks tidak memuat jawaban yang diminta secara eksplisit, katakan informasinya belum tersedia dan jangan mengarang detail."""
 
 
-def _merge_with_overlap(base: str, continuation: str) -> str:
-    left = base.rstrip()
-    right = continuation.lstrip()
+def _limit_to_sentence_count(text: str, max_sentences: int = 2) -> str:
+    normalized = " ".join((text or "").split()).strip()
+    if not normalized:
+        return ""
 
-    left_lower = left.lower()
-    right_lower = right.lower()
+    sentence_breaks: list[int] = []
+    for index, char in enumerate(normalized):
+        if char in ".!?":
+            sentence_breaks.append(index + 1)
+            if len(sentence_breaks) >= max_sentences:
+                return normalized[: sentence_breaks[-1]].strip()
 
-    for i in range(min(len(left), len(right), 200), 5, -1):
-        if left_lower[-i:] == right_lower[:i]:
-            return left + right[i:]
-
-    return f"{left} {right}"
-
-
-def _extend_answer_if_needed(question, context, answer, done_reason, history=None):
-    current = (answer or "").strip()
-    if not current:
-        return current
-
-    max_retry = 1
-
-    for _ in range(max_retry):
-        is_cutoff = done_reason == "length"
-        complete = _answer_looks_complete(current)
-
-        if not is_cutoff and complete:
-            break
-
-        continuation = _continue_answer(question, context, current, history)
-
-        if not continuation:
-            break
-
-        current = _merge_with_overlap(current, continuation)
-
-    return current
+    return normalized
 
 
-# =========================
-# SUMMARIZE
-# =========================
+def _close_incomplete_answer(text: str, done_reason: str) -> str:
+    normalized = " ".join((text or "").split()).strip()
+    if not normalized:
+        return ""
 
-def _should_summarize(question: str) -> bool:
-    q = (question or "").lower()
-    markers = ("jelaskan", "detail", "rincikan", "lengkap")
-    return not any(m in q for m in markers)
+    if normalized[-1] in ".!?":
+        return normalized
+
+    if str(done_reason or "").strip().lower() == "length":
+        shortened = _limit_to_sentence_count(normalized, max_sentences=2)
+        if shortened and shortened[-1] in ".!?":
+            return shortened
+
+    return f"{normalized}."
+
+
+def _should_summarize(answer: str) -> bool:
+    return len((answer or "").strip()) > 240
+
+
+def _trim_to_word_boundary(text: str, max_chars: int) -> str:
+    normalized = " ".join((text or "").split()).strip()
+    if len(normalized) <= max_chars:
+        return normalized
+
+    candidate = normalized[:max_chars].rstrip(" ,;:")
+    last_space = candidate.rfind(" ")
+    if last_space >= max_chars * 0.65:
+        candidate = candidate[:last_space].rstrip(" ,;:")
+    return candidate
 
 
 def _summarize_answer(answer: str) -> str:
     text = (answer or "").strip()
-
     if len(text) < 220:
         return text
 
-    prompt = f"""Ringkas jawaban berikut menjadi inti:
+    shortened = _limit_to_sentence_count(text, max_sentences=2)
+    if len(shortened) > 240:
+        shortened = _trim_to_word_boundary(shortened, 240)
+    return _close_incomplete_answer(shortened, done_reason="")
 
-- Maksimal 2 kalimat
-- Ambil poin paling penting saja
-- Jangan bertele-tele
-
-{text}
-"""
-
-    try:
-        response = _http_session.post(
-            f"{settings.ollama_base_url}/api/generate",
-            json={
-                "model": settings.ollama_chat_model,
-                "prompt": prompt,
-                "system": SYSTEM_PROMPT,
-                "stream": False,
-                "options": _ollama_generate_options({
-                    "num_predict": settings.ollama_num_predict_short
-                }),
-            },
-            timeout=60,
-        )
-
-        response.raise_for_status()
-        short = (response.json().get("response", "") or "").strip()
-
-        return short if short else text
-
-    except Exception:
-        return text
-
-
-# =========================
-# FINAL
-# =========================
 
 def _finalize(answer: str) -> str:
     return answer.strip() if answer else FALLBACK_MESSAGE
 
 
-# =========================
-# MAIN
-# =========================
-
-def generate_answer(question: str, context: str, history=None) -> str:
+def generate_answer(question: str, context: str, history=None, grounding_note: str = "") -> str:
     response = _http_session.post(
         f"{settings.ollama_base_url}/api/generate",
         json={
             "model": settings.ollama_chat_model,
-            "prompt": _build_prompt(question, context, history),
+            "prompt": _build_prompt(question, context, history, grounding_note),
             "system": SYSTEM_PROMPT,
             "stream": False,
             "options": _answer_options(),
@@ -268,28 +167,21 @@ def generate_answer(question: str, context: str, history=None) -> str:
     payload = response.json()
 
     answer = (payload.get("response", "") or "").strip()
-    done_reason = (payload.get("done_reason", "") or "").lower()
+    done_reason = str(payload.get("done_reason", "") or "").strip().lower()
+    answer = _close_incomplete_answer(answer, done_reason)
 
-    answer = _extend_answer_if_needed(
-        question, context, answer, done_reason, history
-    )
-
-    if _should_summarize(question):
+    if _should_summarize(answer):
         answer = _summarize_answer(answer)
 
     return _finalize(answer)
 
 
-# =========================
-# STREAM
-# =========================
-
-def generate_answer_stream(question: str, context: str, history=None) -> Iterator[str]:
+def generate_answer_stream(question: str, context: str, history=None, grounding_note: str = "") -> Iterator[str]:
     with _http_session.post(
         f"{settings.ollama_base_url}/api/generate",
         json={
             "model": settings.ollama_chat_model,
-            "prompt": _build_prompt(question, context, history),
+            "prompt": _build_prompt(question, context, history, grounding_note),
             "system": SYSTEM_PROMPT,
             "stream": True,
             "options": _answer_options(),
@@ -297,7 +189,6 @@ def generate_answer_stream(question: str, context: str, history=None) -> Iterato
         stream=True,
         timeout=120,
     ) as response:
-
         response.raise_for_status()
         emitted = False
 

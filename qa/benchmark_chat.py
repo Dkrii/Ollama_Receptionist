@@ -10,41 +10,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-ACTIVE_CONTACT_STAGES = {
-    "await_disambiguation",
-    "await_confirmation",
-    "contacting_unavailable_pending",
-    "await_unavailable_choice",
-    "await_waiter_name",
-    "await_message_name",
-    "await_message_goal",
-}
-
-CONTACT_MARKERS = (
-    "hubungi",
-    "kontak",
-    "sambungkan",
-    "telepon",
-    "telpon",
-    "panggil",
-    "ketemu",
-    "bertemu",
-    "temui",
-    "menemui",
-    "jumpa",
-    "mau ngobrol",
-    "ingin ngobrol",
-    "mau bicara",
-    "ingin bicara",
-    "orangnya",
-    "orang itu",
-    "timnya",
-    "tim itu",
-    "yang ngurus",
-    "yang urus",
-)
-
-
 @dataclass
 class RunResult:
     query_id: str
@@ -59,36 +24,20 @@ class RunResult:
     answer_chars: int
     contact_probe_called: bool
 
-
-def should_probe_contact_flow(message: str, flow_state: dict[str, Any]) -> bool:
-    stage = str((flow_state or {}).get("stage") or "idle").strip().lower()
-    if stage in ACTIVE_CONTACT_STAGES:
-        return True
-
-    normalized = " ".join((message or "").lower().split())
-    if not normalized:
-        return False
-
-    return any(marker in normalized for marker in CONTACT_MARKERS)
-
-
-def post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, Any], float]:
-    data = json.dumps(payload).encode("utf-8")
-    req = Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
-    started = time.perf_counter()
-    with urlopen(req, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        return response.status, json.loads(body or "{}"), elapsed_ms
-
-
-def post_stream(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, float, float, str]:
+def post_stream(
+    url: str,
+    payload: dict[str, Any],
+    timeout: float,
+) -> tuple[int, float, float, str, str | None, dict[str, Any], str]:
     data = json.dumps(payload).encode("utf-8")
     req = Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
 
     started = time.perf_counter()
     first_token_ms: float | None = None
     answer_parts: list[str] = []
+    conversation_id: str | None = None
+    flow_state: dict[str, Any] = {"stage": "idle"}
+    route = "rag"
 
     with urlopen(req, timeout=timeout) as response:
         for raw in response:
@@ -100,7 +49,12 @@ def post_stream(url: str, payload: dict[str, Any], timeout: float) -> tuple[int,
             except json.JSONDecodeError:
                 continue
 
-            if event.get("type") == "token":
+            if event.get("type") == "meta":
+                conversation_id = event.get("conversation_id") or conversation_id
+                if isinstance(event.get("flow_state"), dict):
+                    flow_state = event["flow_state"]
+                route = str(event.get("route") or route)
+            elif event.get("type") == "token":
                 token = str(event.get("value") or "")
                 if token and first_token_ms is None:
                     first_token_ms = (time.perf_counter() - started) * 1000
@@ -108,7 +62,15 @@ def post_stream(url: str, payload: dict[str, Any], timeout: float) -> tuple[int,
 
         total_ms = (time.perf_counter() - started) * 1000
 
-    return 200, float(first_token_ms or total_ms), float(total_ms), "".join(answer_parts).strip()
+    return (
+        200,
+        float(first_token_ms or total_ms),
+        float(total_ms),
+        "".join(answer_parts).strip(),
+        conversation_id,
+        flow_state,
+        route,
+    )
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -138,70 +100,35 @@ def run_benchmark(base_url: str, testset_path: Path, timeout: float) -> dict[str
         if not message:
             continue
 
-        probe_called = should_probe_contact_flow(message, flow_state)
-
         try:
-            if probe_called:
-                status, payload, elapsed_ms = post_json(
-                    f"{base_url}/api/chat/contact-flow",
-                    {
-                        "message": message,
-                        "conversation_id": conversation_id,
-                        "history": [],
-                        "flow_state": flow_state,
-                    },
-                    timeout=timeout,
-                )
-                conversation_id = payload.get("conversation_id") or conversation_id
-                if isinstance(payload.get("flow_state"), dict):
-                    flow_state = payload["flow_state"]
-                else:
-                    flow_state = {"stage": "idle"}
-
-                handled = bool(payload.get("handled"))
-                answer_text = str(payload.get("answer") or "")
-
-                if handled:
-                    results.append(
-                        RunResult(
-                            query_id=query_id,
-                            category=category,
-                            message=message,
-                            endpoint="contact-flow",
-                            status="ok",
-                            handled=True,
-                            http_status=status,
-                            ttft_ms=elapsed_ms,
-                            total_ms=elapsed_ms,
-                            answer_chars=len(answer_text),
-                            contact_probe_called=True,
-                        )
-                    )
-                    continue
-
-            status, ttft_ms, total_ms, answer_text = post_stream(
+            status, ttft_ms, total_ms, answer_text, next_conversation_id, next_flow_state, route = post_stream(
                 f"{base_url}/api/chat/stream",
                 {
                     "message": message,
                     "conversation_id": conversation_id,
                     "history": [],
+                    "flow_state": flow_state,
                 },
                 timeout=timeout,
             )
+            conversation_id = next_conversation_id or conversation_id
+            flow_state = next_flow_state if isinstance(next_flow_state, dict) else {"stage": "idle"}
+            handled = route == "contact_flow"
+            endpoint = "contact-flow" if handled else "chat-stream"
 
             results.append(
                 RunResult(
                     query_id=query_id,
                     category=category,
                     message=message,
-                    endpoint="chat-stream",
+                    endpoint=endpoint,
                     status="ok",
-                    handled=False,
+                    handled=handled,
                     http_status=status,
                     ttft_ms=ttft_ms,
                     total_ms=total_ms,
                     answer_chars=len(answer_text),
-                    contact_probe_called=probe_called,
+                    contact_probe_called=False,
                 )
             )
         except HTTPError as exc:
@@ -210,14 +137,14 @@ def run_benchmark(base_url: str, testset_path: Path, timeout: float) -> dict[str
                     query_id=query_id,
                     category=category,
                     message=message,
-                    endpoint="contact-flow" if probe_called else "chat-stream",
+                    endpoint="chat-stream",
                     status=f"http_error:{exc.code}",
                     handled=False,
                     http_status=int(exc.code),
                     ttft_ms=0.0,
                     total_ms=0.0,
                     answer_chars=0,
-                    contact_probe_called=probe_called,
+                    contact_probe_called=False,
                 )
             )
         except URLError:
@@ -226,14 +153,14 @@ def run_benchmark(base_url: str, testset_path: Path, timeout: float) -> dict[str
                     query_id=query_id,
                     category=category,
                     message=message,
-                    endpoint="contact-flow" if probe_called else "chat-stream",
+                    endpoint="chat-stream",
                     status="connection_error",
                     handled=False,
                     http_status=0,
                     ttft_ms=0.0,
                     total_ms=0.0,
                     answer_chars=0,
-                    contact_probe_called=probe_called,
+                    contact_probe_called=False,
                 )
             )
 

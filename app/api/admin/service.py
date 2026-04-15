@@ -5,7 +5,6 @@ import shutil
 import requests
 from fastapi import UploadFile
 
-from api.admin.repository import AdminRepository
 from config import settings
 from rag.client import get_chroma_client, get_collection
 from rag.ingest import ingest_knowledge
@@ -13,59 +12,6 @@ from rag.loaders import SUPPORTED_EXTENSIONS, list_documents
 
 
 class AdminAppService:
-    @staticmethod
-    def _clean_text(value: str) -> str:
-        return (value or "").strip()
-
-    @staticmethod
-    def _validate_employee_payload(*, nama: str, departemen: str, jabatan: str, nomor_wa: str) -> tuple[str, str, str, str]:
-        clean_nama = AdminAppService._clean_text(nama)
-        clean_departemen = AdminAppService._clean_text(departemen)
-        clean_jabatan = AdminAppService._clean_text(jabatan)
-        clean_nomor_wa = AdminAppService._clean_text(nomor_wa)
-
-        if not clean_nama:
-            raise ValueError("Nama wajib diisi")
-        if not clean_departemen:
-            raise ValueError("Departemen wajib diisi")
-        if not clean_jabatan:
-            raise ValueError("Jabatan wajib diisi")
-        if not clean_nomor_wa:
-            raise ValueError("Nomor WA wajib diisi")
-
-        return clean_nama, clean_departemen, clean_jabatan, clean_nomor_wa
-
-    @staticmethod
-    def create_employee(*, nama: str, departemen: str, jabatan: str, nomor_wa: str) -> dict:
-        clean_nama, clean_departemen, clean_jabatan, clean_nomor_wa = AdminAppService._validate_employee_payload(
-            nama=nama,
-            departemen=departemen,
-            jabatan=jabatan,
-            nomor_wa=nomor_wa,
-        )
-        return AdminRepository.create_employee(
-            nama=clean_nama,
-            departemen=clean_departemen,
-            jabatan=clean_jabatan,
-            nomor_wa=clean_nomor_wa,
-        )
-
-    @staticmethod
-    def list_employees() -> dict:
-        employees = AdminRepository.list_employees()
-        return {
-            "employees": employees,
-            "total": len(employees),
-        }
-
-    @staticmethod
-    def list_contact_messages(limit: int = 50) -> dict:
-        items = AdminRepository.list_contact_messages(limit=limit)
-        return {
-            "messages": items,
-            "total": len(items),
-        }
-
     @staticmethod
     def reindex() -> dict:
         return ingest_knowledge()

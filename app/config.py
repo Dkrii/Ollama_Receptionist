@@ -25,7 +25,7 @@ class Settings(BaseModel):
     chroma_hnsw_space: str = os.getenv("CHROMA_HNSW_SPACE", "cosine")
 
     rag_top_k: int = int(os.getenv("RAG_TOP_K", "2"))
-    rag_score_threshold: float = float(os.getenv("RAG_SCORE_THRESHOLD", "0.0"))
+    rag_score_threshold: float = float(os.getenv("RAG_SCORE_THRESHOLD", "0.72"))
     rag_chunk_size: int = int(os.getenv("RAG_CHUNK_SIZE", "900"))
     rag_chunk_overlap: int = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
     rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "1600"))
@@ -37,12 +37,20 @@ class Settings(BaseModel):
     chat_history_max_chars: int = int(os.getenv("CHAT_HISTORY_MAX_CHARS", "1000"))
     chat_transcript_retention_days: int = int(os.getenv("CHAT_TRANSCRIPT_RETENTION_DAYS", "7"))
     chat_intent_max_retries: int = int(os.getenv("CHAT_INTENT_MAX_RETRIES", "2"))
+    chat_intent_timeout_seconds: int = int(os.getenv("CHAT_INTENT_TIMEOUT_SECONDS", "20"))
     chat_natural_response_enabled: bool = os.getenv("CHAT_NATURAL_RESPONSE_ENABLED", "1") in {
         "1",
         "true",
         "yes",
         "on",
     }
+    contact_default_mode: str = os.getenv("CONTACT_DEFAULT_MODE", "notify").strip().lower()
+    contact_call_mode: str = os.getenv("CONTACT_CALL_MODE", "dummy").strip().lower()
+    contact_message_delivery_mode: str = os.getenv("CONTACT_MESSAGE_DELIVERY_MODE", "dummy").strip().lower()
+    whatsapp_api_base_url: str = os.getenv("WHATSAPP_API_BASE_URL", "").strip()
+    whatsapp_api_key: str = os.getenv("WHATSAPP_API_KEY", "").strip()
+    whatsapp_sender_id: str = os.getenv("WHATSAPP_SENDER_ID", "").strip()
+    whatsapp_timeout_seconds: int = int(os.getenv("WHATSAPP_TIMEOUT_SECONDS", "15"))
 
 
 settings = Settings()

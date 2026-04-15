@@ -330,14 +330,18 @@ function scheduleContactBusyFollowUp(followUp) {
     }, delay);
   };
 
-  if (preCountdownAnswer) {
-    setSubtitle(preCountdownAnswer, 'bot');
-    appendConversationTurn('assistant', preCountdownAnswer);
-    speakText(preCountdownAnswer, { onEnd: startCountdown });
-    return;
-  }
+  const startAfterCurrentSpeech = () => {
+    if (preCountdownAnswer) {
+      setSubtitle(preCountdownAnswer, 'bot');
+      appendConversationTurn('assistant', preCountdownAnswer);
+      speakText(preCountdownAnswer, { onEnd: startCountdown });
+      return;
+    }
 
-  waitForCurrentSpeechToFinish(startCountdown);
+    startCountdown();
+  };
+
+  waitForCurrentSpeechToFinish(startAfterCurrentSpeech);
 }
 
 function scheduleSessionIdleReset() {
@@ -494,84 +498,6 @@ function drainSpeechQueue() {
   window.speechSynthesis.speak(utter);
 }
 
-async function tryHandleEmployeeContactFlow(message) {
-  const response = await fetch('/api/chat/contact-flow', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      conversation_id: activeConversationId || null,
-      history: buildRequestHistory(),
-      flow_state: contactFlowState || { stage: 'idle' }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error('Gagal memproses alur hubungi karyawan');
-  }
-
-  const data = await response.json();
-  setActiveConversationId(data.conversation_id || activeConversationId);
-
-  if (data.flow_state && typeof data.flow_state === 'object') {
-    contactFlowState = data.flow_state;
-  } else {
-    contactFlowState = { stage: 'idle' };
-  }
-
-  if (contactFlowState.stage !== 'contacting_unavailable_pending') {
-    clearContactBusyFollowUp();
-  }
-
-  if (!data.handled) {
-    return false;
-  }
-
-  const answer = String(data.answer || '').trim() || 'Baik, silakan ulangi permintaannya.';
-  setSubtitle(answer, 'bot');
-  appendConversationTurn('user', message);
-  appendConversationTurn('assistant', answer);
-  scheduleSessionIdleReset();
-  speakText(answer);
-
-  if (data.follow_up && typeof data.follow_up === 'object') {
-    scheduleContactBusyFollowUp(data.follow_up);
-  }
-
-  return true;
-}
-
-function shouldProbeContactFlow(message) {
-  const activeStages = new Set([
-    'await_disambiguation',
-    'await_confirmation',
-    'contacting_unavailable_pending',
-    'await_unavailable_choice',
-    'await_waiter_name',
-    'await_message_name',
-    'await_message_goal'
-  ]);
-
-  const currentStage = String((contactFlowState && contactFlowState.stage) || 'idle').trim().toLowerCase();
-  if (activeStages.has(currentStage)) {
-    return true;
-  }
-
-  const normalized = String(message || '').toLowerCase().trim();
-  if (!normalized) {
-    return false;
-  }
-
-  const markers = [
-    'hubungi', 'kontak', 'sambungkan', 'telepon', 'telpon', 'panggil',
-    'ketemu', 'bertemu', 'temui', 'menemui', 'jumpa',
-    'mau ngobrol', 'ingin ngobrol', 'mau bicara', 'ingin bicara',
-    'orangnya', 'orang itu', 'timnya', 'tim itu', 'yang ngurus', 'yang urus'
-  ];
-
-  return markers.some((marker) => normalized.includes(marker));
-}
-
 // Messaging Logic
 async function sendMessage(message) {
   if (isSending) return;
@@ -591,22 +517,17 @@ async function sendMessage(message) {
   
   let finalAnswer = '';
   let streamEventError = '';
+  let pendingFollowUp = null;
 
   try {
-    if (shouldProbeContactFlow(message)) {
-      const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
-      if (handledByContactFlow) {
-        return;
-      }
-    }
-
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
         conversation_id: activeConversationId || null,
-        history: buildRequestHistory()
+        history: buildRequestHistory(),
+        flow_state: contactFlowState || { stage: 'idle' }
       })
     });
 
@@ -643,7 +564,17 @@ async function sendMessage(message) {
         
         if (event.type === 'meta') {
           setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+          if (contactFlowState.stage !== 'contacting_unavailable_pending') {
+            clearContactBusyFollowUp();
+          }
           scheduleSessionIdleReset();
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           if (token) {
@@ -661,6 +592,22 @@ async function sendMessage(message) {
       }
     }
 
+    if (buffer.trim()) {
+      try {
+        const event = JSON.parse(buffer.trim());
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
+        }
+      } catch (parseError) {}
+    }
+
     if (!finalAnswer.trim()) {
       finalAnswer = streamEventError || 'Maaf, saya tidak mengerti.';
       setSubtitle(finalAnswer, 'bot');
@@ -671,6 +618,9 @@ async function sendMessage(message) {
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
     scheduleSessionIdleReset();
+    if (pendingFollowUp) {
+      scheduleContactBusyFollowUp(pendingFollowUp);
+    }
   } catch (err) {
     const fallback = 'Terjadi kesalahan sistem, mohon coba lagi.';
     setSubtitle(fallback, 'error');

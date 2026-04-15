@@ -26,16 +26,6 @@ const dashCoverage = document.getElementById('dashCoverage');
 const dashCheckedAt = document.getElementById('dashCheckedAt');
 const dashRecentActivity = document.getElementById('dashRecentActivity');
 const dashInsightText = document.getElementById('dashInsightText');
-const employeeForm = document.getElementById('employeeForm');
-const employeeSaveBtn = document.getElementById('employeeSaveBtn');
-const employeeNamaInput = document.getElementById('employeeNama');
-const employeeDepartemenInput = document.getElementById('employeeDepartemen');
-const employeeJabatanInput = document.getElementById('employeeJabatan');
-const employeeNomorWaInput = document.getElementById('employeeNomorWa');
-const employeeTableBody = document.getElementById('employeeTableBody');
-const employeeTableEmpty = document.getElementById('employeeTableEmpty');
-const contactMessageTableBody = document.getElementById('contactMessageTableBody');
-const contactMessageTableEmpty = document.getElementById('contactMessageTableEmpty');
 
 function setPageStatus(text, mode = 'active') {
   adminPageStatus.textContent = text;
@@ -88,135 +78,7 @@ function activateView(viewName) {
 
 function getViewFromHash() {
   if (window.location.hash === '#knowledge') return 'knowledge';
-  if (window.location.hash === '#employees') return 'employees';
   return 'dashboard';
-}
-
-function renderEmployeeTable(items) {
-  if (!employeeTableBody || !employeeTableEmpty) return;
-
-  employeeTableBody.innerHTML = '';
-  for (const item of items) {
-    const row = document.createElement('tr');
-
-    const namaCell = document.createElement('td');
-    namaCell.textContent = item.nama || '-';
-
-    const departemenCell = document.createElement('td');
-    departemenCell.textContent = item.departemen || '-';
-
-    const jabatanCell = document.createElement('td');
-    jabatanCell.textContent = item.jabatan || '-';
-
-    const waCell = document.createElement('td');
-    waCell.textContent = item.nomor_wa || '-';
-
-    row.appendChild(namaCell);
-    row.appendChild(departemenCell);
-    row.appendChild(jabatanCell);
-    row.appendChild(waCell);
-    employeeTableBody.appendChild(row);
-  }
-
-  employeeTableEmpty.classList.toggle('is-hidden', items.length > 0);
-}
-
-async function refreshEmployees() {
-  const response = await fetch('/api/admin/employees');
-  if (!response.ok) throw new Error('Gagal memuat data karyawan');
-
-  const payload = await response.json();
-  const employees = payload.employees || [];
-  renderEmployeeTable(employees);
-}
-
-function buildRecipientLabel(employeeName) {
-  const cleaned = String(employeeName || '').trim();
-  if (!cleaned) return 'Pak/Bu -';
-  const firstName = cleaned.split(/\s+/)[0] || cleaned;
-  return `Pak ${firstName}`;
-}
-
-function buildDeliveryBadge(status) {
-  if (status === 'sent_dummy') {
-    return { label: 'Sent Dummy', className: 'vr-knowledge-status--indexed' };
-  }
-  return { label: 'Queued', className: 'vr-knowledge-status--pending' };
-}
-
-function renderContactMessageTable(items) {
-  if (!contactMessageTableBody || !contactMessageTableEmpty) return;
-
-  contactMessageTableBody.innerHTML = '';
-  for (const item of items) {
-    const row = document.createElement('tr');
-
-    const labelCell = document.createElement('td');
-    const labelBadge = document.createElement('span');
-    labelBadge.className = 'vr-recipient-label';
-    labelBadge.textContent = buildRecipientLabel(item.employee_nama);
-    labelCell.appendChild(labelBadge);
-
-    const employeeCell = document.createElement('td');
-    employeeCell.textContent = item.employee_nama || '-';
-
-    const visitorCell = document.createElement('td');
-    visitorCell.textContent = item.visitor_name || '-';
-
-    const goalCell = document.createElement('td');
-    goalCell.textContent = item.visitor_goal || '-';
-
-    const statusCell = document.createElement('td');
-    const statusBadge = document.createElement('span');
-    const statusMeta = buildDeliveryBadge(item.delivery_status);
-    statusBadge.className = `vr-knowledge-status ${statusMeta.className}`;
-    statusBadge.textContent = statusMeta.label;
-    statusCell.appendChild(statusBadge);
-
-    const timeCell = document.createElement('td');
-    timeCell.textContent = item.created_at
-      ? new Date(item.created_at).toLocaleString('id-ID')
-      : '-';
-
-    row.appendChild(labelCell);
-    row.appendChild(employeeCell);
-    row.appendChild(visitorCell);
-    row.appendChild(goalCell);
-    row.appendChild(statusCell);
-    row.appendChild(timeCell);
-    contactMessageTableBody.appendChild(row);
-  }
-
-  contactMessageTableEmpty.classList.toggle('is-hidden', items.length > 0);
-}
-
-async function refreshContactMessages() {
-  const response = await fetch('/api/admin/contact-messages?limit=50');
-  if (!response.ok) throw new Error('Gagal memuat pesan titipan');
-
-  const payload = await response.json();
-  const messages = payload.messages || [];
-  renderContactMessageTable(messages);
-}
-
-async function saveEmployee(payload) {
-  const response = await fetch('/api/admin/employees', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    let detail = 'Gagal menyimpan data karyawan';
-    try {
-      const errorData = await response.json();
-      detail = errorData.detail || detail;
-    } catch (error) {
-    }
-    throw new Error(detail);
-  }
-
-  return response.json();
 }
 
 function renderDashboardActivity(summaryData) {
@@ -514,44 +376,6 @@ if (knowledgeTableBody) {
   });
 }
 
-if (employeeForm) {
-  employeeForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-
-    if (!employeeNamaInput || !employeeDepartemenInput || !employeeJabatanInput || !employeeNomorWaInput) {
-      setPageStatus('Warning: form karyawan tidak lengkap', 'warning');
-      return;
-    }
-
-    const payload = {
-      nama: employeeNamaInput.value,
-      departemen: employeeDepartemenInput.value,
-      jabatan: employeeJabatanInput.value,
-      nomor_wa: employeeNomorWaInput.value
-    };
-
-    if (employeeSaveBtn) {
-      employeeSaveBtn.disabled = true;
-      employeeSaveBtn.textContent = 'Menyimpan...';
-    }
-
-    try {
-      await saveEmployee(payload);
-      employeeForm.reset();
-      await refreshEmployees();
-      await refreshContactMessages();
-      setPageStatus('Data karyawan berhasil disimpan', 'active');
-    } catch (error) {
-      setPageStatus(error.message || 'Warning: gagal menyimpan data karyawan', 'warning');
-    } finally {
-      if (employeeSaveBtn) {
-        employeeSaveBtn.disabled = false;
-        employeeSaveBtn.textContent = 'Simpan';
-      }
-    }
-  });
-}
-
 for (const navItem of navViewItems) {
   navItem.addEventListener('click', () => {
     const targetView = navItem.dataset.view || 'dashboard';
@@ -574,8 +398,6 @@ window.addEventListener('hashchange', () => {
   try {
     activateView(getViewFromHash());
     await refreshKnowledgeSummary();
-    await refreshEmployees();
-    await refreshContactMessages();
     setPageStatus('Admin Active', 'active');
   } catch (error) {
     setPageStatus('Warning: gagal memuat panel admin', 'warning');

@@ -16,6 +16,7 @@ def chat(payload: ChatRequest):
         payload.message,
         conversation_id=payload.conversation_id,
         history=[item.model_dump() for item in payload.history],
+        flow_state=payload.flow_state,
     )
 
 
@@ -28,6 +29,7 @@ def chat_stream(payload: ChatRequest):
             payload.message,
             conversation_id=payload.conversation_id,
             history=[item.model_dump() for item in payload.history],
+            flow_state=payload.flow_state,
         ),
         media_type="application/x-ndjson",
     )

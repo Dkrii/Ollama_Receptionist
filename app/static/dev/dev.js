@@ -794,6 +794,24 @@ function clearContactBusyFollowUp() {
   syncComposerState();
 }
 
+function waitForSpeechPlaybackToFinish(onDone) {
+  if (typeof onDone !== 'function') return;
+  if (!window.speechSynthesis) {
+    onDone();
+    return;
+  }
+
+  const startedAt = Date.now();
+  const maxWaitMs = 20000;
+  const intervalId = setInterval(() => {
+    const stillSpeaking = isSpeakingQueue || window.speechSynthesis.speaking || window.speechSynthesis.pending;
+    if (!stillSpeaking || (Date.now() - startedAt) >= maxWaitMs) {
+      clearInterval(intervalId);
+      onDone();
+    }
+  }, 120);
+}
+
 function scheduleContactBusyFollowUp(followUp) {
   if (!followUp || typeof followUp !== 'object') return;
 
@@ -813,13 +831,7 @@ function scheduleContactBusyFollowUp(followUp) {
   stopAutoRecognition(false);
   syncComposerState();
 
-  activateConversationLayout();
-  clearChat();
-  const preCountdownBubble = addBotBubble();
-  preCountdownBubble.textContent = preCountdownAnswer;
-  scrollChatToBottom();
-
-  contactBusyCountdownStartTimer = setTimeout(() => {
+  const startCountdown = () => {
     contactBusyCountdownStartTimer = null;
 
     const countdownBubble = addBotBubble();
@@ -882,7 +894,27 @@ function scheduleContactBusyFollowUp(followUp) {
         clearContactBusyFollowUp();
       }
     }, delay);
-  }, 0);
+  };
+
+  const startCountdownSequence = () => {
+    if (preCountdownAnswer) {
+      activateConversationLayout();
+      const preCountdownBubble = addBotBubble();
+      preCountdownBubble.textContent = preCountdownAnswer;
+      scrollChatToBottom();
+      appendConversationTurn('assistant', preCountdownAnswer);
+      speakText(preCountdownAnswer, {
+        onEnd: () => {
+          contactBusyCountdownStartTimer = setTimeout(startCountdown, 0);
+        }
+      });
+      return;
+    }
+
+    contactBusyCountdownStartTimer = setTimeout(startCountdown, 0);
+  };
+
+  waitForSpeechPlaybackToFinish(startCountdownSequence);
 }
 
 function scheduleSessionIdleReset() {
@@ -1212,8 +1244,14 @@ function setComposerBusy(busy) {
   syncComposerState();
 }
 
-function speakText(text) {
-  if (!text || !window.speechSynthesis) return;
+function speakText(text, options = {}) {
+  const onEnd = typeof options.onEnd === 'function' ? options.onEnd : null;
+  if (!text || !window.speechSynthesis) {
+    if (onEnd) {
+      onEnd();
+    }
+    return;
+  }
 
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
@@ -1222,10 +1260,16 @@ function speakText(text) {
   utter.onend = () => {
     updateMicState();
     scheduleConversationReset(0);
+    if (onEnd) {
+      onEnd();
+    }
   };
   utter.onerror = () => {
     updateMicState();
     scheduleConversationReset(0);
+    if (onEnd) {
+      onEnd();
+    }
   };
   window.speechSynthesis.speak(utter);
   updateMicState();
@@ -1319,7 +1363,8 @@ async function sendMessageNonStream(message, thinkingNode = null) {
     body: JSON.stringify({
       message,
       conversation_id: activeConversationId || null,
-      history: buildRequestHistory()
+      history: buildRequestHistory(),
+      flow_state: contactFlowState || { stage: 'idle' }
     })
   });
 
@@ -1328,6 +1373,14 @@ async function sendMessageNonStream(message, thinkingNode = null) {
   const data = await response.json();
   const answer = data.answer || 'Terjadi kesalahan saat memproses pertanyaan.';
   setActiveConversationId(data.conversation_id || activeConversationId);
+  if (data.flow_state && typeof data.flow_state === 'object') {
+    contactFlowState = data.flow_state;
+  } else {
+    contactFlowState = { stage: 'idle' };
+  }
+  if (contactFlowState.stage !== 'contacting_unavailable_pending') {
+    clearContactBusyFollowUp();
+  }
   activateConversationLayout();
   clearChat();
   const botBubble = addBotBubble();
@@ -1345,92 +1398,10 @@ async function sendMessageNonStream(message, thinkingNode = null) {
   if (!window.speechSynthesis) {
     scheduleConversationReset(40);
   }
-  renderDebugStats(null);
-}
-
-async function tryHandleEmployeeContactFlow(message) {
-  const response = await fetch('/api/chat/contact-flow', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      conversation_id: activeConversationId || null,
-      history: buildRequestHistory(),
-      flow_state: contactFlowState || { stage: 'idle' }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error('Gagal memproses alur hubungi karyawan');
-  }
-
-  const data = await response.json();
-  setActiveConversationId(data.conversation_id || activeConversationId);
-
-  if (data.flow_state && typeof data.flow_state === 'object') {
-    contactFlowState = data.flow_state;
-  } else {
-    contactFlowState = { stage: 'idle' };
-  }
-
-  if (contactFlowState.stage !== 'contacting_unavailable_pending') {
-    clearContactBusyFollowUp();
-  }
-
-  if (!data.handled) {
-    return false;
-  }
-
-  const answer = String(data.answer || '').trim() || 'Baik, silakan ulangi permintaannya.';
-  activateConversationLayout();
-  clearChat();
-  const botBubble = addBotBubble();
-  botBubble.textContent = answer;
-  scrollChatToBottom();
-  appendConversationTurn('user', message);
-  appendConversationTurn('assistant', answer);
-  scheduleSessionIdleReset();
-  speakText(answer);
-  if (!window.speechSynthesis) {
-    scheduleConversationReset(40);
-  }
-
   if (data.follow_up && typeof data.follow_up === 'object') {
     scheduleContactBusyFollowUp(data.follow_up);
   }
-
-  return true;
-}
-
-function shouldProbeContactFlow(message) {
-  const activeStages = new Set([
-    'await_disambiguation',
-    'await_confirmation',
-    'contacting_unavailable_pending',
-    'await_unavailable_choice',
-    'await_waiter_name',
-    'await_message_name',
-    'await_message_goal'
-  ]);
-
-  const currentStage = String((contactFlowState && contactFlowState.stage) || 'idle').trim().toLowerCase();
-  if (activeStages.has(currentStage)) {
-    return true;
-  }
-
-  const normalized = String(message || '').toLowerCase().trim();
-  if (!normalized) {
-    return false;
-  }
-
-  const markers = [
-    'hubungi', 'kontak', 'sambungkan', 'telepon', 'telpon', 'panggil',
-    'ketemu', 'bertemu', 'temui', 'menemui', 'jumpa',
-    'mau ngobrol', 'ingin ngobrol', 'mau bicara', 'ingin bicara',
-    'orangnya', 'orang itu', 'timnya', 'tim itu', 'yang ngurus', 'yang urus'
-  ];
-
-  return markers.some((marker) => normalized.includes(marker));
+  renderDebugStats(null);
 }
 
 async function sendMessage(messageOverride = '') {
@@ -1457,27 +1428,21 @@ async function sendMessage(messageOverride = '') {
   let botBubble = null;
   let finalAnswer = '';
   let streamEventError = '';
+  let pendingFollowUp = null;
 
   const startTime = performance.now();
   let firstTokenTime = null;
   renderDebugStats(null);
 
   try {
-    if (shouldProbeContactFlow(message)) {
-      const handledByContactFlow = await tryHandleEmployeeContactFlow(message);
-      if (handledByContactFlow) {
-        renderDebugStats(null);
-        return;
-      }
-    }
-
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
         conversation_id: activeConversationId || null,
-        history: buildRequestHistory()
+        history: buildRequestHistory(),
+        flow_state: contactFlowState || { stage: 'idle' }
       })
     });
 
@@ -1513,7 +1478,17 @@ async function sendMessage(messageOverride = '') {
 
         if (event.type === 'meta') {
           setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+          if (contactFlowState.stage !== 'contacting_unavailable_pending') {
+            clearContactBusyFollowUp();
+          }
           scheduleSessionIdleReset();
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
@@ -1551,7 +1526,16 @@ async function sendMessage(messageOverride = '') {
     if (buffer.trim()) {
       try {
         const event = JSON.parse(buffer.trim());
-        if (event.type === 'citations') {
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value && typeof event.value === 'object' ? event.value : null;
+        } else if (event.type === 'citations') {
           console.debug('Sumber RAG:', event.value || []);
         }
       } catch (parseError) {
@@ -1594,6 +1578,9 @@ async function sendMessage(messageOverride = '') {
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
     scheduleSessionIdleReset();
+    if (pendingFollowUp) {
+      scheduleContactBusyFollowUp(pendingFollowUp);
+    }
   } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());
     const fallbackMessage = 'Terjadi kesalahan saat memproses pertanyaan.';

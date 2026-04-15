@@ -2,110 +2,62 @@ import json
 import logging
 import re
 import time
+from difflib import SequenceMatcher
 from typing import Any
 
 from api.admin.repository import AdminRepository
-from api.chat.intent import detect_conversation_intent
+from api.chat.department import extract_department_from_text, normalize_department
+from api.chat.intent import (
+    detect_conversation_intent,
+    extract_visitor_goal,
+    extract_visitor_name,
+    interpret_unavailable_choice,
+    message_may_require_contact_intent,
+)
 from api.chat.repository import ChatRepository
 from config import settings
+from integrations.contact_dispatch import dispatch_contact_message, normalize_contact_mode, queue_contact_call
+from rag.employee_directory import load_employee_directory
 from rag.generate import generate_answer, generate_answer_stream
 from rag.retrieve import retrieve_context
 
 _logger = logging.getLogger(__name__)
 CHAT_SYSTEM_FALLBACK = "Maaf, sistem sedang mengalami gangguan. Silakan coba lagi sebentar."
-EMPLOYEE_QUERY_MARKERS = (
-    "karyawan",
-    "pegawai",
-    "staff",
-    "staf",
-    "nama karyawan",
-    "daftar karyawan",
-    "employee",
-)
-CONTACT_INTENT_MARKERS = (
-    "hubungi",
-    "sambungkan",
-    "telepon",
-    "telpon",
-    "call",
-    "kontak",
-    "panggil",
-)
-MEET_INTENT_MARKERS = (
-    "ketemu",
-    "bertemu",
-    "temui",
-    "menemui",
-    "jumpa",
-)
-CONTACT_TARGET_MARKERS = (
-    "karyawan",
-    "pegawai",
-    "staff",
-    "staf",
-    "orang",
-)
-CONFUSED_MARKERS = (
-    "bagian komputer",
-    "bagian it",
-    "yang it",
-    "yang bagian",
-    "hmm",
-    "emm",
-)
-# LEAVE_MESSAGE_MARKERS = (
-#     "tinggalkan pesan",
-#     "pesan saja",
-#     "kirim pesan",
-#     "titip pesan",
-# )
-WAIT_MARKERS = (
-    "saya tunggu",
-    "menunggu",
-    "di lobby",
-    "di lobi",
-    "temui saya",
-)
 SYSTEM_CONTACT_TIMEOUT_TOKEN = "__contact_timeout__"
-CONFIRM_YES_MARKERS = (
-    "ya",
-    "iya",
-    "yes",
-    "betul",
-    "benar",
-    "ok",
-    "oke",
-    "lanjut",
+_YES_PATTERNS = (
+    r"\bya\b",
+    r"\biya\b",
+    r"\byes\b",
+    r"\bok(?:e)?\b",
+    r"\bsetuju\b",
+    r"\bbetul\b",
+    r"\blanjut\b",
+    r"\bboleh\b",
+    r"\bsilakan\b",
 )
-CONFIRM_NO_MARKERS = (
-    "tidak",
-    "bukan",
-    "no",
-    "cancel",
-    "batal",
+_NO_PATTERNS = (
+    r"\btidak\b",
+    r"\bnggak\b",
+    r"\bga\b",
+    r"\bgak\b",
+    r"\bno\b",
+    r"\bbatal\b",
+    r"\bjangan\b",
+    r"\btidak jadi\b",
+    r"\bga usah\b",
+    r"\bnggak usah\b",
 )
-
-DEPARTMENT_ALIAS_MAP = {
-    "it": "IT",
-    "teknologi informasi": "IT",
-    "informatika": "IT",
-    "sistem": "IT",
-    "komputer": "IT",
-    "ti": "IT",
-    "hr": "HR",
-    "hrd": "HR",
-    "human resource": "HR",
-    "human resources": "HR",
-}
-
-CONTEXT_REFERENCE_MARKERS = (
-    "orangnya",
-    "orang itu",
-    "timnya",
-    "tim itu",
-    "yang ngurus",
-    "yang urus",
-    "mereka",
+_LEAVE_MESSAGE_PATTERNS = (
+    r"\btinggal(?:kan)? pesan\b",
+    r"\btitip pesan\b",
+    r"\bpesan saja\b",
+    r"\bleave message\b",
+)
+_WAIT_PATTERNS = (
+    r"\btunggu\b",
+    r"\bmenunggu\b",
+    r"\bwait\b",
+    r"\blobby\b",
 )
 
 
@@ -155,17 +107,16 @@ def _build_answer_payload(answer: str, citations: list[dict], conversation_id: s
     return payload
 
 
-def _is_employee_query(message: str) -> bool:
-    lowered = " ".join((message or "").lower().split())
-    return any(marker in lowered for marker in EMPLOYEE_QUERY_MARKERS)
+def _list_knowledge_employees() -> list[dict]:
+    try:
+        return load_employee_directory()
+    except Exception:
+        _logger.exception("chat.employee_directory failed to load")
+        return []
 
 
 def _build_employee_context() -> tuple[str, list[dict]]:
-    try:
-        employees = AdminRepository.list_employees()
-    except Exception:
-        _logger.exception("chat.employee_context failed to load employees")
-        return "", []
+    employees = _list_knowledge_employees()
 
     if not employees:
         return "", []
@@ -178,47 +129,13 @@ def _build_employee_context() -> tuple[str, list[dict]]:
     citation = {
         "content": context,
         "metadata": {
-            "source": "employees",
-            "path": "sqlite:employees",
+            "source": "employees-knowledge",
+            "path": "knowledge:employees-directory",
             "chunk_index": 0,
         },
         "score": 1.0,
     }
     return context, [citation]
-
-
-def _build_employee_answer() -> tuple[str, list[dict]]:
-    employee_context, employee_citations = _build_employee_context()
-    if not employee_context:
-        return "Data karyawan belum tersedia saat ini.", []
-
-    try:
-        employees = AdminRepository.list_employees()
-    except Exception:
-        _logger.exception("chat.employee_answer failed to load employees")
-        return "Data karyawan belum tersedia saat ini.", []
-
-    if not employees:
-        return "Data karyawan belum tersedia saat ini.", []
-
-    employees = sorted(employees, key=lambda item: str(item.get("nama", "")).lower())
-
-    max_visible_items = 6
-    visible_employees = employees[:max_visible_items]
-
-    lines = ["Berikut daftar karyawan yang terdaftar:"]
-    for idx, employee in enumerate(visible_employees, start=1):
-        lines.append(
-            f"{idx}. {employee['nama']} — {employee['departemen']}, {employee['jabatan']}"
-        )
-
-    remaining_count = len(employees) - len(visible_employees)
-    if remaining_count > 0:
-        lines.append(f"dan {remaining_count} karyawan lainnya.")
-
-    lines.append("Sebutkan nama karyawan jika ingin detail kontak WA.")
-
-    return "\n".join(lines), employee_citations
 
 
 def _build_retrieval_result(message: str, history: list[dict]) -> tuple[dict, float]:
@@ -229,19 +146,242 @@ def _build_retrieval_result(message: str, history: list[dict]) -> tuple[dict, fl
         _logger.exception("chat.retrieve failed message=%s", message)
         retrieval = {"context": "", "citations": []}
 
-    if _is_employee_query(message):
-        employee_context, employee_citations = _build_employee_context()
-        if employee_context:
-            base_context = (retrieval.get("context") or "").strip()
-            retrieval["context"] = f"{base_context}\n\n{employee_context}".strip() if base_context else employee_context
-            retrieval["citations"] = [*employee_citations, *(retrieval.get("citations") or [])]
-
     retrieval_ms = (time.perf_counter() - retrieval_started_at) * 1000
     return retrieval, retrieval_ms
 
 
+def _build_grounding_note(retrieval: dict[str, Any]) -> str:
+    support = retrieval.get("support") if isinstance(retrieval, dict) else {}
+    if not isinstance(support, dict):
+        support = {}
+
+    grounding = str(support.get("grounding") or "low").strip().lower()
+    if grounding == "high":
+        return "Konteks sangat relevan. Jawab singkat dan langsung dengan fakta yang tertulis."
+    if grounding == "medium":
+        return (
+            "Konteks cukup relevan, tetapi mungkin hanya menjawab sebagian. "
+            "Pastikan setiap detail spesifik yang disebut memang tertulis eksplisit."
+        )
+    return (
+        "Konteks hanya berkaitan sebagian atau lemah. "
+        "Jangan memberikan lokasi, nomor, nama, jadwal, atau detail spesifik kecuali benar-benar tertulis jelas."
+    )
+
+
+def _should_fallback_to_unknown(retrieval: dict[str, Any]) -> bool:
+    support = retrieval.get("support") if isinstance(retrieval, dict) else {}
+    if not isinstance(support, dict):
+        support = {}
+
+    context = str(retrieval.get("context") or "").strip() if isinstance(retrieval, dict) else ""
+    citations = retrieval.get("citations") if isinstance(retrieval, dict) else []
+    has_citations = isinstance(citations, list) and bool(citations)
+
+    # Jangan fallback jika masih ada konteks/citation yang bisa dijadikan jawaban.
+    if context or has_citations:
+        return False
+
+    grounding = str(support.get("grounding") or "").strip().lower()
+    top_coverage = float(support.get("top_coverage") or 0.0)
+    top_bigram_coverage = float(support.get("top_bigram_coverage") or 0.0)
+    return grounding == "low" and top_coverage <= 0.05 and top_bigram_coverage <= 0.0
+
+
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").lower().split())
+
+
+_RETRIEVAL_STOPWORDS = {
+    "ada",
+    "adalah",
+    "apa",
+    "apakah",
+    "atau",
+    "bagaimana",
+    "berapa",
+    "dalam",
+    "dan",
+    "dari",
+    "dengan",
+    "di",
+    "dimana",
+    "di mana",
+    "hari",
+    "ini",
+    "itu",
+    "kalau",
+    "ke",
+    "keadaan",
+    "kerja",
+    "mana",
+    "mohon",
+    "saja",
+    "saya",
+    "silakan",
+    "tentang",
+    "tolong",
+    "untuk",
+    "yang",
+}
+
+
+def _tokenize_for_retrieval(text: str) -> list[str]:
+    normalized = _normalize_text(text)
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _informative_tokens(text: str) -> list[str]:
+    return [
+        token
+        for token in _tokenize_for_retrieval(text)
+        if len(token) > 1 and token not in _RETRIEVAL_STOPWORDS
+    ]
+
+
+def _candidate_overlap_score(query: str, candidate: str) -> float:
+    query_tokens = _informative_tokens(query)
+    if not query_tokens:
+        return 0.0
+
+    candidate_text = _normalize_text(candidate)
+    candidate_tokens = set(_tokenize_for_retrieval(candidate_text))
+    if not candidate_tokens:
+        return 0.0
+
+    overlap = sum(1 for token in query_tokens if token in candidate_tokens)
+    coverage = overlap / max(1, len(query_tokens))
+    bigram_hits = 0
+    if len(query_tokens) > 1:
+        bigrams = [f"{left} {right}" for left, right in zip(query_tokens, query_tokens[1:])]
+        bigram_hits = sum(1 for gram in bigrams if gram in candidate_text)
+        coverage += (bigram_hits / max(1, len(bigrams))) * 0.18
+
+    return coverage
+
+
+def _cleanup_structured_answer(text: str) -> str:
+    cleaned = " ".join((text or "").replace("|", " | ").split()).strip(" ,;:")
+    if not cleaned:
+        return ""
+    if cleaned[-1] not in ".!?":
+        cleaned += "."
+    return cleaned
+
+
+def _extract_structured_candidates(citations: list[dict]) -> list[dict[str, str | float]]:
+    candidates: list[dict[str, str | float]] = []
+
+    for citation in citations:
+        content = str(citation.get("content") or "").strip()
+        if not content:
+            continue
+
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        section_context: list[str] = []
+
+        for line in lines:
+            faq_matches = list(re.finditer(r"([^|?]{0,120}\?)\s*\|\s*(.+?)(?=(?:\s+[^|?]{0,120}\?\s*\|)|$)", line))
+            if faq_matches:
+                for match in faq_matches:
+                    label = match.group(1).strip()
+                    value = match.group(2).strip()
+                    context_text = " ".join([*section_context[-2:], label, value]).strip()
+                    candidates.append(
+                        {
+                            "label": label,
+                            "value": value,
+                            "context": context_text,
+                            "kind": "faq",
+                        }
+                    )
+                continue
+
+            if "|" in line:
+                parts = [part.strip() for part in line.split("|") if part.strip()]
+                if len(parts) >= 2:
+                    label = parts[0]
+                    value = " | ".join(parts[1:]).strip()
+                    context_text = " ".join([*section_context[-2:], label, value]).strip()
+                    candidates.append(
+                        {
+                            "label": label,
+                            "value": value,
+                            "context": context_text,
+                            "kind": "field",
+                        }
+                    )
+                    continue
+
+            section_context.append(line)
+            if len(section_context) > 3:
+                section_context = section_context[-3:]
+
+    return candidates
+
+
+def _fallback_answer_from_retrieval(message: str, retrieval: dict[str, Any]) -> str:
+    citations = retrieval.get("citations") if isinstance(retrieval, dict) else []
+    if not isinstance(citations, list) or not citations:
+        return ""
+
+    best_candidate: dict[str, str | float] | None = None
+    best_score = 0.0
+    for candidate in _extract_structured_candidates(citations):
+        score = _candidate_overlap_score(message, str(candidate.get("context") or ""))
+        if str(candidate.get("kind") or "") == "faq":
+            score += 0.08
+        if score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    if not best_candidate or best_score < 0.42:
+        return ""
+
+    label = str(best_candidate.get("label") or "").strip()
+    value = str(best_candidate.get("value") or "").strip()
+    kind = str(best_candidate.get("kind") or "").strip()
+
+    if kind == "faq":
+        return _cleanup_structured_answer(value)
+
+    answer = f"{label}: {value}"
+    return _cleanup_structured_answer(answer)
+
+
+def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _classify_confirmation_text(message: str) -> str:
+    normalized = _normalize_text(message)
+    if not normalized:
+        return "unknown"
+
+    has_yes = _matches_any_pattern(normalized, _YES_PATTERNS)
+    has_no = _matches_any_pattern(normalized, _NO_PATTERNS)
+
+    if has_yes and not has_no:
+        return "confirm_yes"
+    if has_no and not has_yes:
+        return "confirm_no"
+    return "unknown"
+
+
+def _classify_unavailable_choice_fast(message: str) -> str:
+    normalized = _normalize_text(message)
+    if not normalized:
+        return "unknown"
+
+    if _matches_any_pattern(normalized, _LEAVE_MESSAGE_PATTERNS):
+        return "leave_message"
+    if _matches_any_pattern(normalized, _WAIT_PATTERNS):
+        return "wait_in_lobby"
+
+    confirmation = _classify_confirmation_text(normalized)
+    if confirmation == "confirm_no":
+        return "decline"
+    return "unknown"
 
 
 def _safe_flow_context(flow_state: dict[str, Any] | None) -> dict[str, str]:
@@ -267,32 +407,24 @@ def _build_idle_flow_state(context: dict[str, str]) -> dict[str, Any]:
     }
 
 
+_EMPLOYEE_FUZZY_THRESHOLD = 0.0
+
+
+def _similarity(a: str, b: str) -> float:
+    """Hitung kemiripan dua string menggunakan SequenceMatcher."""
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
 def _normalize_department_label(value: str) -> str:
-    normalized = _normalize_text(value)
-    if not normalized:
-        return ""
-
-    for alias, canonical in DEPARTMENT_ALIAS_MAP.items():
-        if re.search(rf"\b{re.escape(alias)}\b", normalized):
-            return canonical
-
-    compact = normalized.replace(" ", "")
-    if compact in {"it", "hr", "hrd"}:
-        return compact.upper() if compact != "hrd" else "HR"
-    return value.strip()
-
-
-def _looks_like_context_reference(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    return any(marker in normalized for marker in CONTEXT_REFERENCE_MARKERS)
+    """Delegasikan ke modul shared."""
+    return normalize_department(value)
 
 
 def _update_flow_context_from_intent(
     base_context: dict[str, str],
     intent_result: dict[str, Any],
-    message: str,
 ) -> dict[str, str]:
     context = {
         "last_topic_type": str(base_context.get("last_topic_type") or "none"),
@@ -305,132 +437,102 @@ def _update_flow_context_from_intent(
     target_type = str(intent_result.get("target_type") or "none").strip().lower()
     target_value = str(intent_result.get("target_value") or "").strip()
 
-    if intent in {"company_info", "contact_employee"} and target_type in {"department", "person"} and target_value and confidence >= 0.65:
+    if intent in {"company_info", "contact_employee"} and target_type in {"department", "person"} and target_value:
         context["last_topic_type"] = target_type
         context["last_topic_value"] = _normalize_department_label(target_value) if target_type == "department" else target_value
-
-    if (
-        intent == "contact_employee"
-        and confidence >= 0.65
-        and context["last_topic_type"] == "department"
-        and not target_value
-        and _looks_like_context_reference(message)
-    ):
-        context["last_topic_value"] = _normalize_department_label(context["last_topic_value"])
 
     context["last_intent"] = intent
     return context
 
 
-def _is_contact_intent(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
+def _resolve_contact_mode(intent_result: dict[str, Any], flow_state: dict[str, Any] | None = None) -> str:
+    intent_mode = normalize_contact_mode(intent_result.get("contact_mode"))
+    if intent_mode in {"call", "notify"}:
+        return intent_mode
 
-    has_action = any(marker in normalized for marker in CONTACT_INTENT_MARKERS)
-    has_meet = any(marker in normalized for marker in MEET_INTENT_MARKERS)
-    has_target = any(marker in normalized for marker in CONTACT_TARGET_MARKERS)
-    has_from_division = " dari " in f" {normalized} "
-
-    cleaned = normalized
-    for marker in CONTACT_INTENT_MARKERS:
-        cleaned = re.sub(rf"\b{re.escape(marker)}\b", " ", cleaned)
-    for marker in ("tolong", "saya", "mau", "ingin", "dong"):
-        cleaned = re.sub(rf"\b{re.escape(marker)}\b", " ", cleaned)
-    residual_tokens = [token for token in re.sub(r"[^a-z0-9\s]", " ", cleaned).split() if token]
-    has_direct_subject = has_action and len(residual_tokens) >= 1
-
-    return (has_action and has_target) or has_meet or (has_action and has_from_division) or has_direct_subject
-
-
-def _is_confused_contact_request(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    has_confused_marker = any(marker in normalized for marker in CONFUSED_MARKERS)
-    if not has_confused_marker:
-        return False
-
-    has_contact_signal = any(marker in normalized for marker in CONTACT_INTENT_MARKERS) or any(
-        marker in normalized for marker in MEET_INTENT_MARKERS
-    )
-    return has_contact_signal
-
-
-def _is_confirmation_yes(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    tokens = set(re.sub(r"[^a-z0-9\s]", " ", normalized).split())
-    return bool(tokens.intersection(CONFIRM_YES_MARKERS))
-
-
-def _is_confirmation_no(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    tokens = set(re.sub(r"[^a-z0-9\s]", " ", normalized).split())
-    return bool(tokens.intersection(CONFIRM_NO_MARKERS))
-
-
-def _detect_contact_action(message: str, flow_state: dict[str, Any] | None = None) -> str:
-    normalized = _normalize_text(message)
-    if any(marker in normalized for marker in ("call", "telepon", "telpon")):
-        return "call"
-    if any(marker in normalized for marker in ("notifikasi", "notif", "pesan", "wa", "whatsapp")):
-        return "notify"
     if isinstance(flow_state, dict):
         saved = str(flow_state.get("action") or "").strip().lower()
         if saved in {"call", "notify"}:
             return saved
-    return "notify"
+    return normalize_contact_mode(None)
 
 
-def _is_leave_message_request(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    return any(marker in normalized for marker in LEAVE_MESSAGE_MARKERS)
+def _employee_fuzzy_score(employee: dict, query: str) -> float:
+    """
+    Hitung skor kemiripan antara query dan data karyawan.
+
+    Menggabungkan beberapa sinyal:
+    - similarity nama penuh vs query
+    - similarity per-token (nama depan, dst)
+    - similarity departemen dan jabatan
+    - substring containment sebagai boost tambahan
+
+    Tidak membutuhkan exact match — typo ringan dan nama panggilan
+    tetap bisa ditemukan.
+    """
+    nq = _normalize_text(query)
+    if not nq:
+        return 1.0
+
+    nama = _normalize_text(str(employee.get("nama", "")))
+    dept = _normalize_text(str(employee.get("departemen", "")))
+    jabatan = _normalize_text(str(employee.get("jabatan", "")))
+
+    # Similarity nama penuh
+    score_nama = _similarity(nq, nama)
+
+    # Similarity tiap token nama (misal: hanya sebut nama depan)
+    nama_tokens = nama.split()
+    token_scores = [_similarity(nq, t) for t in nama_tokens] if nama_tokens else [0.0]
+    score_token_name = max(token_scores)
+
+    # Containment: apakah query ada sebagai substring di nama
+    score_contains = 0.75 if nq in nama else 0.0
+
+    # Similarity departemen dan jabatan (bobot lebih rendah)
+    score_dept = _similarity(nq, dept) * 0.65
+    score_jabatan = _similarity(nq, jabatan) * 0.55
+
+    return max(score_nama, score_token_name, score_contains, score_dept, score_jabatan)
 
 
-def _is_waiting_response(message: str) -> bool:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return False
-    return any(marker in normalized for marker in WAIT_MARKERS)
+def _search_employees(query: str, department_hint: str = "") -> list[dict]:
+    """
+    Cari karyawan yang paling cocok dengan query menggunakan fuzzy scoring.
+    Mengembalikan daftar terurut dari yang paling relevan.
+    """
+    employees = _list_knowledge_employees()
+    if not query or not _normalize_text(query):
+        return employees
 
+    canonical_hint = _normalize_department_label(department_hint)
+    scored: list[tuple[dict, float]] = []
+    for employee in employees:
+        score = _employee_fuzzy_score(employee, query)
+        employee_department = _normalize_department_label(str(employee.get("departemen", "")))
+        if canonical_hint:
+            if employee_department == canonical_hint:
+                score += 0.35
+            else:
+                score -= 0.18
+        scored.append((employee, score))
 
-def _employee_matches_query(employee: dict, query: str) -> bool:
-    normalized_query = _normalize_text(query)
-    if not normalized_query:
-        return True
-
-    tokens = [token for token in re.sub(r"[^a-z0-9\s]", " ", normalized_query).split() if token]
-    if not tokens:
-        return True
-
-    employee_blob = _normalize_text(
-        " ".join(
-            [
-                str(employee.get("nama", "")),
-                str(employee.get("departemen", "")),
-                str(employee.get("jabatan", "")),
-            ]
+    scored.sort(
+        key=lambda item: (
+            -item[1],
+            _normalize_text(str(item[0].get("nama", ""))),
         )
     )
+    matches = [emp for emp, _ in scored]
 
-    return all(token in employee_blob for token in tokens)
+    if canonical_hint:
+        department_matches = [
+            emp for emp in matches
+            if _normalize_department_label(str(emp.get("departemen", ""))) == canonical_hint
+        ]
+        if department_matches:
+            matches = department_matches
 
-
-def _search_employees(query: str) -> list[dict]:
-    try:
-        employees = AdminRepository.list_employees()
-    except Exception:
-        _logger.exception("chat.contact search failed")
-        return []
-
-    matches = [employee for employee in employees if _employee_matches_query(employee, query)]
-    matches.sort(key=lambda item: str(item.get("nama", "")).lower())
     return matches
 
 
@@ -439,11 +541,7 @@ def _search_employees_by_department(department: str) -> list[dict]:
     if not canonical_dept:
         return []
 
-    try:
-        employees = AdminRepository.list_employees()
-    except Exception:
-        _logger.exception("chat.contact search by department failed")
-        return []
+    employees = _list_knowledge_employees()
 
     matches: list[dict] = []
     for employee in employees:
@@ -455,129 +553,66 @@ def _search_employees_by_department(department: str) -> list[dict]:
     return matches
 
 
-def _extract_employee_query(message: str) -> str:
-    normalized = _normalize_text(message)
-    cleaned = normalized
-    stop_phrases = (
-        "tolong",
-        "mau",
-        "ingin",
-        "saya",
-        "bisa",
-        "dong",
-        "menghubungi",
-        "mengontak",
-        "mengontakki",
-        "mengkontak",
-        "menghubunginya",
-        "ketemu",
-        "bertemu",
-        "temui",
-        "menemui",
-        "jumpa",
-        "pak",
-        "bu",
-        "dari",
-        "divisi",
-        "bagian",
-        "hubungi",
-        "sambungkan",
-        "telepon",
-        "telpon",
-        "call",
-        "kontak",
-        "panggil",
-        "karyawan",
-        "pegawai",
-        "staff",
-        "staf",
-    )
-    for phrase in stop_phrases:
-        cleaned = re.sub(rf"\b{re.escape(phrase)}\b", " ", cleaned)
-
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or normalized
-
-
-def _extract_employee_name_lookup_query(message: str) -> str:
-    normalized = _normalize_text(message)
-    if not normalized:
-        return ""
-
-    has_name_token = " nama " in f" {normalized} "
-    if not has_name_token:
-        return ""
-
-    lookup_markers = (
-        "apakah",
-        "ada",
-        "terdaftar",
-        "di sini",
-        "disini",
-        "di perusahaan",
-        "di kantor",
-        "karyawan",
-        "pegawai",
-        "staff",
-        "staf",
-    )
-    if not any(marker in normalized for marker in lookup_markers):
-        return ""
-
-    cleaned = normalized
-    stop_phrases = (
-        "apakah",
-        "ada",
-        "nama",
-        "yang",
-        "bernama",
-        "di",
-        "sini",
-        "disini",
-        "kantor",
-        "perusahaan",
-        "ini",
-        "karyawan",
-        "pegawai",
-        "staff",
-        "staf",
-    )
-    for phrase in stop_phrases:
-        cleaned = re.sub(rf"\b{re.escape(phrase)}\b", " ", cleaned)
-
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def _build_employee_name_lookup_answer(query: str) -> tuple[str, list[dict]]:
-    matches = _search_employees(query)
-    _, citations = _build_employee_context()
-
-    if not matches:
-        return f"Saya belum menemukan nama {query.title()} di data karyawan saat ini.", citations
-
-    visible_matches = matches[:3]
-    match_details = ", ".join(_format_employee_brief(employee) for employee in visible_matches)
-    remaining_count = len(matches) - len(visible_matches)
-
-    answer = f"Ya, saya menemukan {len(matches)} data yang cocok untuk nama {query.title()}: {match_details}."
-    if remaining_count > 0:
-        answer += f" Dan {remaining_count} data lainnya."
-
-    answer += " Jika ingin, saya bisa bantu hubungi salah satunya."
-    return answer, citations
-
-
-def _format_employee_brief(employee: dict) -> str:
-    return f"{employee['nama']} ({employee['departemen']} - {employee['jabatan']})"
-
-
 def _format_employee_for_prompt(employee: dict) -> str:
     return f"{employee['nama']} dari {employee['departemen']}"
 
 
 def _format_employee_name_department(employee: dict) -> str:
     return f"{employee['nama']} ({employee['departemen']})"
+
+
+def _same_contact_target(active_state: dict[str, Any], semantic_intent: dict[str, Any]) -> bool:
+    target_type = str(semantic_intent.get("target_type") or "none").strip().lower()
+    target_value = _normalize_text(str(semantic_intent.get("target_value") or ""))
+    target_department = _normalize_department_label(str(semantic_intent.get("target_department") or ""))
+
+    active_selected = active_state.get("selected") if isinstance(active_state, dict) else {}
+    active_target_kind = str((active_state or {}).get("target_kind") or "person").strip().lower()
+    active_department = _normalize_department_label(str((active_state or {}).get("department") or ""))
+    active_name = _normalize_text(str((active_selected or {}).get("nama") or ""))
+    active_selected_department = _normalize_department_label(str((active_selected or {}).get("departemen") or ""))
+
+    if target_type == "department":
+        return active_target_kind == "department" and bool(target_department) and active_department == target_department
+
+    if target_type == "person":
+        same_name = bool(target_value) and active_name == target_value
+        if not target_department:
+            return same_name
+        return same_name and active_selected_department == target_department
+
+    return False
+
+
+def _should_restart_contact_flow(
+    *,
+    stage: str,
+    user_message: str,
+    safe_flow_state: dict[str, Any],
+    semantic_intent: dict[str, Any],
+    semantic_contact_usable: bool,
+) -> bool:
+    if stage not in {
+        "await_disambiguation",
+        "await_confirmation",
+        "contacting_unavailable_pending",
+        "await_unavailable_choice",
+        "await_waiter_name",
+        "await_message_name",
+        "await_message_goal",
+    }:
+        return False
+
+    if not semantic_contact_usable:
+        return False
+
+    if _classify_confirmation_text(user_message) != "unknown":
+        return False
+
+    if _classify_unavailable_choice_fast(user_message) != "unknown":
+        return False
+
+    return not _same_contact_target(safe_flow_state, semantic_intent)
 
 
 def _build_cancel_contact_answer(selected: dict | None, target_kind: str, department: str) -> str:
@@ -594,90 +629,6 @@ def _build_cancel_contact_answer(selected: dict | None, target_kind: str, depart
         )
 
     return "Saya sudah membatalkan proses hubungi. Apakah ada yang bisa saya bantu lagi?"
-
-
-def _extract_person_name_input(message: str) -> str:
-    value = (message or "").strip()
-    if not value:
-        return ""
-
-    head = value.split(",", 1)[0].strip()
-    normalized_head = _normalize_text(head)
-    normalized_head = re.sub(r"[^a-z0-9\s]", " ", normalized_head)
-    raw_tokens = [token for token in normalized_head.split() if token]
-    if not raw_tokens:
-        return ""
-
-    filler_words = {
-        "nama",
-        "saya",
-        "adalah",
-        "dari",
-        "pak",
-        "bu",
-        "mbak",
-        "mas",
-        "tujuan",
-        "keperluan",
-        "meeting",
-        "vendor",
-        "hubungi",
-        "kontak",
-    }
-    tokens = [token for token in raw_tokens if token not in filler_words]
-    if not tokens:
-        return ""
-
-    return " ".join(word.capitalize() for word in tokens[:3])
-
-
-def _extract_visitor_goal_input(message: str) -> str:
-    value = (message or "").strip()
-    if not value:
-        return ""
-
-    lowered = _normalize_text(value)
-    markers = ("tujuan", "keperluan", "perlu", "untuk")
-    for marker in markers:
-        key = f"{marker}"
-        idx = lowered.find(key)
-        if idx >= 0:
-            goal_text = value[idx + len(marker):].strip(" :,-")
-            if goal_text:
-                return goal_text
-
-    if "," in value:
-        tail = value.split(",", 1)[1].strip()
-        if tail:
-            return tail
-
-    return value
-
-
-def _create_dummy_contact_message(selected: dict, message_content: str) -> tuple[bool, dict | None]:
-    visitor_name = _extract_person_name_input(message_content)
-    visitor_goal = _extract_visitor_goal_input(message_content)
-
-    if not visitor_name or len(visitor_goal) < 5:
-        return False, None
-
-    stored = AdminRepository.create_contact_message(
-        employee_id=int(selected["id"]),
-        employee_nama=str(selected["nama"]),
-        employee_departemen=str(selected["departemen"]),
-        employee_nomor_wa=str(selected["nomor_wa"]),
-        visitor_name=visitor_name,
-        visitor_goal=visitor_goal,
-        message_text=message_content,
-        channel="whatsapp",
-        delivery_status="queued_dummy",
-        delivery_detail="Menunggu dummy dispatcher",
-    )
-    delivered = AdminRepository.mark_contact_message_sent_dummy(
-        message_id=int(stored["id"]),
-        delivery_detail="Dummy WhatsApp dispatcher berhasil (simulasi tanpa API key)",
-    )
-    return True, delivered
 
 
 def _build_contact_response(
@@ -735,21 +686,25 @@ def _resolve_disambiguation_choice(message: str, candidates: list[dict]) -> dict
 
 def _perform_contact_action(employee: dict, action: str) -> dict[str, Any]:
     if action == "call":
+        dispatch_result = queue_contact_call(employee=employee)
         return {
             "type": "call",
-            "status": "queued",
+            "status": dispatch_result["status"],
+            "provider": dispatch_result["provider"],
             "employee": {
                 "id": employee["id"],
                 "nama": employee["nama"],
                 "departemen": employee["departemen"],
                 "jabatan": employee["jabatan"],
             },
-            "detail": "Permintaan panggilan (VoIP/WebRTC) diterima.",
+            "detail": dispatch_result["detail"],
+            "provider_payload": dispatch_result.get("provider_payload"),
         }
 
     return {
         "type": "notify",
         "status": "queued",
+        "provider": "workflow",
         "employee": {
             "id": employee["id"],
             "nama": employee["nama"],
@@ -757,7 +712,7 @@ def _perform_contact_action(employee: dict, action: str) -> dict[str, Any]:
             "jabatan": employee["jabatan"],
             "nomor_wa": employee["nomor_wa"],
         },
-        "detail": "Notifikasi diteruskan ke karyawan.",
+        "detail": "Permintaan kontak diterima dan sistem sedang mengecek ketersediaan karyawan.",
     }
 
 
@@ -782,16 +737,40 @@ class ChatAppService:
             "await_message_name",
             "await_message_goal",
         }
-        action = _detect_contact_action(user_message, safe_flow_state)
         base_context = _safe_flow_context(safe_flow_state)
-
-        should_run_intent_llm = (not is_active_stage) and _is_contact_intent(user_message)
-        semantic_intent = detect_conversation_intent(
-            user_message,
-            flow_state=safe_flow_state,
-            allow_llm=should_run_intent_llm,
+        is_internal_timeout_event = (
+            stage == "contacting_unavailable_pending"
+            and _normalize_text(user_message) == SYSTEM_CONTACT_TIMEOUT_TOKEN
         )
-        flow_context = _update_flow_context_from_intent(base_context, semantic_intent, user_message)
+        active_stage_allows_new_target = (
+            is_active_stage
+            and _classify_confirmation_text(user_message) == "unknown"
+            and _classify_unavailable_choice_fast(user_message) == "unknown"
+        )
+        should_probe_intent_llm = (
+            not is_internal_timeout_event
+            and message_may_require_contact_intent(user_message, safe_flow_state)
+            and (not is_active_stage or active_stage_allows_new_target)
+        )
+        semantic_intent = (
+            detect_conversation_intent(
+                user_message,
+                flow_state=safe_flow_state,
+                allow_llm=True,
+            )
+            if should_probe_intent_llm
+            else {
+                "intent": "unknown",
+                "confidence": 0.0,
+                "target_type": "none",
+                "target_value": "",
+                "action": "none",
+                "contact_mode": "auto",
+                "search_phrase": "",
+            }
+        )
+        action = _resolve_contact_mode(semantic_intent, safe_flow_state)
+        flow_context = _update_flow_context_from_intent(base_context, semantic_intent)
 
         def _state(stage_name: str, **kwargs: Any) -> dict[str, Any]:
             payload: dict[str, Any] = {
@@ -814,36 +793,44 @@ class ChatAppService:
         semantic_action = str(semantic_intent.get("action") or "none").strip().lower()
         semantic_contact_detected = (
             str(semantic_intent.get("intent") or "").strip().lower() == "contact_employee"
-            and semantic_contact_confidence >= 0.7
         )
         semantic_contact_has_explicit_target = (
             semantic_target_type in {"person", "department"}
             and bool(semantic_target_value)
         )
+        semantic_contact_has_resolved_candidate = False
+        if semantic_contact_detected and semantic_action == "contact" and not semantic_contact_has_explicit_target:
+            # search_phrase sudah diekstrak dalam satu prompt intent — tidak perlu LLM call terpisah
+            fallback_query = str(semantic_intent.get("search_phrase") or "").strip() or user_message
+            fallback_matches = _search_employees(
+                fallback_query,
+                department_hint=str(semantic_intent.get("target_department") or "").strip() or extract_department_from_text(user_message) or "",
+            )
+            semantic_contact_has_resolved_candidate = bool(fallback_matches)
+
         semantic_contact_usable = semantic_contact_detected and semantic_action == "contact" and (
             semantic_contact_has_explicit_target
-            or _looks_like_context_reference(user_message)
+            or semantic_contact_has_resolved_candidate
         )
 
-        if not is_active_stage and not (_is_contact_intent(user_message) or semantic_contact_usable):
-            if _is_confused_contact_request(user_message):
-                answer = "Anda bisa mengatakan: hubungi nama dari divisi. Contoh: hubungi Budi dari IT."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_build_idle_flow_state(flow_context),
-                )
+        if _should_restart_contact_flow(
+            stage=stage,
+            user_message=user_message,
+            safe_flow_state=safe_flow_state,
+            semantic_intent=semantic_intent,
+            semantic_contact_usable=semantic_contact_usable,
+        ):
+            safe_flow_state = {}
+            stage = "idle"
+            is_active_stage = False
+
+        if not is_active_stage and not semantic_contact_usable:
             return {
                 "handled": False,
                 "flow_state": _build_idle_flow_state(flow_context),
                 "conversation_id": resolved_conversation_id,
             }
 
-        is_internal_timeout_event = (
-            stage == "contacting_unavailable_pending"
-            and _normalize_text(user_message) == SYSTEM_CONTACT_TIMEOUT_TOKEN
-        )
         if not is_internal_timeout_event:
             _store_chat_message(resolved_conversation_id, "user", user_message)
 
@@ -949,7 +936,8 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            if _is_confirmation_no(user_message):
+            current_intent = _classify_confirmation_text(user_message)
+            if current_intent == "confirm_no":
                 answer = _build_cancel_contact_answer(selected, target_kind, department)
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
@@ -958,9 +946,9 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            if not _is_confirmation_yes(user_message):
+            if current_intent != "confirm_yes":
                 answer = (
-                    "silakan jawab terlebih dahulu, apakah anda ingin melanjutkan hubungi "
+                    "Silakan jawab terlebih dahulu, apakah Anda ingin melanjutkan hubungi "
                     f"{selected['nama']} ({selected['departemen']})?"
                 )
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
@@ -977,7 +965,17 @@ class ChatAppService:
                     ),
                 )
 
-            action_result = _perform_contact_action(selected, action)
+            try:
+                action_result = _perform_contact_action(selected, action)
+            except Exception:
+                _logger.exception("chat.contact action dispatch failed")
+                answer = "Maaf, sistem belum berhasil memproses permintaan hubungi saat ini."
+                _store_chat_message(resolved_conversation_id, "assistant", answer)
+                return _build_contact_response(
+                    answer=answer,
+                    conversation_id=resolved_conversation_id,
+                    flow_state=_state("idle"),
+                )
             if target_kind == "department" and department:
                 answer = (
                     f"Baik, saya akan menghubungkan Anda dengan staf {department} yang tersedia. "
@@ -1027,7 +1025,12 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            if _is_leave_message_request(user_message):
+            choice_decision = _classify_unavailable_choice_fast(user_message)
+            if choice_decision == "unknown":
+                choice_result = interpret_unavailable_choice(user_message, safe_flow_state)
+                choice_decision = str(choice_result.get("decision") or "unknown").strip().lower()
+
+            if choice_decision == "leave_message":
                 answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
@@ -1042,22 +1045,7 @@ class ChatAppService:
                     ),
                 )
 
-            if _is_confirmation_yes(user_message):
-                answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state(
-                        "await_message_name",
-                        action=action,
-                        selected=selected,
-                        target_kind=target_kind,
-                        department=department,
-                    ),
-                )
-
-            if _is_confirmation_no(user_message):
+            if choice_decision == "decline":
                 answer = (
                     "Baik, Anda tidak meninggalkan pesan. "
                     "Silakan menuju front office untuk bantuan lebih lanjut secara offline."
@@ -1069,7 +1057,7 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            if _is_waiting_response(user_message):
+            if choice_decision == "wait_in_lobby":
                 answer = (
                     f"Baik, silakan sebutkan nama Anda. "
                     f"Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
@@ -1090,14 +1078,14 @@ class ChatAppService:
             if target_kind == "department" and department:
                 answer = (
                     f"Saat ini tim {department} sedang tidak tersedia. "
-                    "Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
-                    "Apakah anda ingin meninggalkan pesan?"
+                    "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. "
+                    "Apa yang ingin Anda lakukan?"
                 )
             else:
                 answer = (
                     f"{selected['nama']} sedang tidak tersedia saat ini. "
-                    "Anda bisa tinggalkan pesan dengan mengatakan \"tinggalkan pesan\", "
-                    "Apakah anda ingin meninggalkan pesan?"
+                    "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. "
+                    "Apa yang ingin Anda lakukan?"
                 )
             _store_chat_message(resolved_conversation_id, "assistant", answer)
             return _build_contact_response(
@@ -1125,7 +1113,7 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            visitor_name = _extract_person_name_input(user_message)
+            visitor_name = extract_visitor_name(user_message, safe_flow_state)
             if not visitor_name:
                 answer = "Silakan sebutkan nama Anda terlebih dahulu."
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
@@ -1165,7 +1153,7 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            visitor_name = _extract_person_name_input(user_message)
+            visitor_name = extract_visitor_name(user_message, safe_flow_state)
             if not visitor_name:
                 answer = "Mohon sebutkan nama Anda terlebih dahulu agar saya bisa mencatat pesannya."
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
@@ -1227,7 +1215,7 @@ class ChatAppService:
                     ),
                 )
 
-            visitor_goal = _extract_visitor_goal_input(user_message)
+            visitor_goal = extract_visitor_goal(user_message, safe_flow_state)
             if len(visitor_goal) < 5:
                 answer = "Tujuannya masih terlalu singkat. Mohon jelaskan tujuan Anda dengan lebih lengkap."
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
@@ -1244,9 +1232,10 @@ class ChatAppService:
                     ),
                 )
 
+            stored_message: dict[str, Any] | None = None
             try:
                 message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
-                stored = AdminRepository.create_contact_message(
+                stored_message = AdminRepository.create_contact_message(
                     employee_id=int(selected["id"]),
                     employee_nama=str(selected["nama"]),
                     employee_departemen=str(selected["departemen"]),
@@ -1255,15 +1244,39 @@ class ChatAppService:
                     visitor_goal=visitor_goal,
                     message_text=message_content,
                     channel="whatsapp",
-                    delivery_status="queued_dummy",
-                    delivery_detail="Menunggu dummy dispatcher",
+                    delivery_status="queued",
+                    delivery_detail="Menunggu dispatcher WhatsApp.",
+                    delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
                 )
-                delivered_payload = AdminRepository.mark_contact_message_sent_dummy(
-                    message_id=int(stored["id"]),
-                    delivery_detail="Dummy WhatsApp dispatcher berhasil (simulasi tanpa API key)",
+                dispatch_result = dispatch_contact_message(
+                    employee=selected,
+                    visitor_name=visitor_name,
+                    visitor_goal=visitor_goal,
+                    message_text=message_content,
+                )
+                delivered_payload = AdminRepository.update_contact_message_delivery(
+                    message_id=int(stored_message["id"]),
+                    delivery_status=str(dispatch_result.get("status") or "sent"),
+                    delivery_detail=str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
+                    delivery_provider=str(dispatch_result.get("provider") or "dummy"),
+                    provider_message_id=str(dispatch_result.get("provider_message_id") or ""),
+                    provider_payload=dispatch_result.get("provider_payload"),
+                    mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"sent", "sent_dummy"},
                 )
             except Exception:
-                _logger.exception("chat.contact message create failed")
+                _logger.exception("chat.contact message dispatch failed")
+                if stored_message and stored_message.get("id"):
+                    try:
+                        AdminRepository.update_contact_message_delivery(
+                            message_id=int(stored_message["id"]),
+                            delivery_status="failed",
+                            delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
+                            delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+                            provider_payload={"error": "dispatch_failed"},
+                            mark_sent=False,
+                        )
+                    except Exception:
+                        _logger.exception("chat.contact message failure update failed")
                 answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
                 _store_chat_message(resolved_conversation_id, "assistant", answer)
                 return _build_contact_response(
@@ -1272,10 +1285,17 @@ class ChatAppService:
                     flow_state=_state("idle"),
                 )
 
-            answer = (
-                f"Baik, pesan Anda untuk {selected['nama']} sudah terkirim. "
-                "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
-            )
+            delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
+            if delivery_status in {"queued", "queued_dummy"}:
+                answer = (
+                    f"Baik, pesan Anda untuk {selected['nama']} sudah dicatat dan sedang diproses. "
+                    "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
+                )
+            else:
+                answer = (
+                    f"Baik, pesan Anda untuk {selected['nama']} sudah terkirim. "
+                    "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
+                )
             _store_chat_message(resolved_conversation_id, "assistant", answer)
             return _build_contact_response(
                 answer=answer,
@@ -1283,7 +1303,8 @@ class ChatAppService:
                 flow_state=_state("idle"),
                 action_result={
                     "type": "notify",
-                    "status": "sent_dummy",
+                    "status": str((delivered_payload or {}).get("delivery_status") or "sent"),
+                    "provider": str((delivered_payload or {}).get("delivery_provider") or "dummy"),
                     "employee": {
                         "id": selected["id"],
                         "nama": selected["nama"],
@@ -1300,8 +1321,6 @@ class ChatAppService:
 
         if semantic_target_type == "department" and semantic_target_value:
             department_target = _normalize_department_label(semantic_target_value)
-        elif _looks_like_context_reference(user_message) and flow_context.get("last_topic_type") == "department":
-            department_target = _normalize_department_label(flow_context.get("last_topic_value") or "")
 
         if department_target:
             dept_matches = _search_employees_by_department(department_target)
@@ -1330,19 +1349,19 @@ class ChatAppService:
                 ),
             )
 
-        search_query = _extract_employee_query(user_message)
-        matches = _search_employees(search_query)
+        if semantic_target_type == "person" and semantic_target_value:
+            search_query = semantic_target_value
+        else:
+            # Gunakan search_phrase yang sudah ada di intent result — tanpa LLM call tambahan
+            search_query = str(semantic_intent.get("search_phrase") or "").strip() or user_message
+        department_hint = (
+            str(semantic_intent.get("target_department") or "").strip()
+            or extract_department_from_text(user_message)
+            or ""
+        )
+        matches = _search_employees(search_query, department_hint=department_hint)
 
         if not matches:
-            if _is_confused_contact_request(user_message):
-                answer = "Anda bisa mengatakan: hubungi nama dari divisi. Contoh: hubungi Budi dari IT."
-                _store_chat_message(resolved_conversation_id, "assistant", answer)
-                return _build_contact_response(
-                    answer=answer,
-                    conversation_id=resolved_conversation_id,
-                    flow_state=_state("idle"),
-                )
-
             answer = "Saya tidak menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya."
             _store_chat_message(resolved_conversation_id, "assistant", answer)
             return _build_contact_response(
@@ -1379,45 +1398,57 @@ class ChatAppService:
         )
 
     @staticmethod
-    def ask(message: str, conversation_id: str | None = None, history: list[dict] | None = None) -> dict:
+    def ask(
+        message: str,
+        conversation_id: str | None = None,
+        history: list[dict] | None = None,
+        flow_state: dict[str, Any] | None = None,
+    ) -> dict:
         started_at = time.perf_counter()
-        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(conversation_id, history=history)
+        contact_result = ChatAppService.handle_contact_flow(
+            message,
+            conversation_id=conversation_id,
+            history=history,
+            flow_state=flow_state,
+        )
+        if contact_result.get("handled"):
+            payload = _build_answer_payload(
+                str(contact_result.get("answer") or "").strip(),
+                [],
+                contact_result.get("conversation_id"),
+            )
+            payload["handled"] = True
+            payload["flow_state"] = contact_result.get("flow_state") or {"stage": "idle"}
+            if contact_result.get("action"):
+                payload["action"] = contact_result["action"]
+            if contact_result.get("follow_up"):
+                payload["follow_up"] = contact_result["follow_up"]
+            return payload
+
+        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(
+            contact_result.get("conversation_id") or conversation_id,
+            history=history,
+        )
         try:
             _store_chat_message(resolved_conversation_id, "user", message)
 
-            employee_name_lookup_query = _extract_employee_name_lookup_query(message)
-            if employee_name_lookup_query:
-                lookup_answer, lookup_citations = _build_employee_name_lookup_answer(employee_name_lookup_query)
-                _store_chat_message(resolved_conversation_id, "assistant", lookup_answer)
-                elapsed_ms = (time.perf_counter() - started_at) * 1000
-                _logger.info(
-                    "chat.ask route=employee_name_lookup conversation_id=%s total_ms=%.1f query=%s",
-                    resolved_conversation_id,
-                    elapsed_ms,
-                    employee_name_lookup_query,
-                )
-                return _build_answer_payload(lookup_answer, lookup_citations, resolved_conversation_id)
-
-            if _is_employee_query(message):
-                employee_answer, employee_citations = _build_employee_answer()
-                _store_chat_message(resolved_conversation_id, "assistant", employee_answer)
-                elapsed_ms = (time.perf_counter() - started_at) * 1000
-                _logger.info(
-                    "chat.ask route=employee_data conversation_id=%s total_ms=%.1f",
-                    resolved_conversation_id,
-                    elapsed_ms,
-                )
-                return _build_answer_payload(employee_answer, employee_citations, resolved_conversation_id)
-
             retrieval, retrieval_ms = _build_retrieval_result(message, prior_history)
 
-            # fallback_answer = _fallback_answer_from_retrieval(message, retrieval)
-            # if fallback_answer:
-            #     _store_chat_message(resolved_conversation_id, "assistant", fallback_answer)
-            #     return _build_answer_payload(fallback_answer, retrieval["citations"], resolved_conversation_id)
+            if _should_fallback_to_unknown(retrieval):
+                answer = "Maaf, saya belum menemukan informasi pastinya di knowledge yang tersedia."
+                _store_chat_message(resolved_conversation_id, "assistant", answer)
+                payload = _build_answer_payload(answer, retrieval["citations"], resolved_conversation_id)
+                payload["handled"] = False
+                payload["flow_state"] = contact_result.get("flow_state") or {"stage": "idle"}
+                return payload
 
             answer_started_at = time.perf_counter()
-            answer = generate_answer(message, retrieval["context"], history=prior_history)
+            answer = generate_answer(
+                message,
+                retrieval["context"],
+                history=prior_history,
+                grounding_note=_build_grounding_note(retrieval),
+            )
             answer_ms = (time.perf_counter() - answer_started_at) * 1000
             _store_chat_message(resolved_conversation_id, "assistant", answer)
 
@@ -1429,7 +1460,10 @@ class ChatAppService:
                 answer_ms,
                 elapsed_ms,
             )
-            return _build_answer_payload(answer, retrieval["citations"], resolved_conversation_id)
+            payload = _build_answer_payload(answer, retrieval["citations"], resolved_conversation_id)
+            payload["handled"] = False
+            payload["flow_state"] = contact_result.get("flow_state") or {"stage": "idle"}
+            return payload
         except Exception:
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             _logger.exception(
@@ -1437,66 +1471,88 @@ class ChatAppService:
                 resolved_conversation_id,
                 elapsed_ms,
             )
-            return _build_answer_payload(CHAT_SYSTEM_FALLBACK, [], resolved_conversation_id)
+            payload = _build_answer_payload(CHAT_SYSTEM_FALLBACK, [], resolved_conversation_id)
+            payload["handled"] = False
+            payload["flow_state"] = contact_result.get("flow_state") or {"stage": "idle"}
+            return payload
 
     @staticmethod
-    def ask_stream(message: str, conversation_id: str | None = None, history: list[dict] | None = None):
+    def ask_stream(
+        message: str,
+        conversation_id: str | None = None,
+        history: list[dict] | None = None,
+        flow_state: dict[str, Any] | None = None,
+    ):
         started_at = time.perf_counter()
-        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(conversation_id, history=history)
+        contact_result = ChatAppService.handle_contact_flow(
+            message,
+            conversation_id=conversation_id,
+            history=history,
+            flow_state=flow_state,
+        )
+        if contact_result.get("handled"):
+            handled_answer = str(contact_result.get("answer") or "").strip()
+            handled_conversation_id = contact_result.get("conversation_id")
+            handled_flow_state = contact_result.get("flow_state") or {"stage": "idle"}
+            handled_action = contact_result.get("action")
+            handled_follow_up = contact_result.get("follow_up")
+
+            def _contact_events():
+                meta_payload = {
+                    "type": "meta",
+                    "route": "contact_flow",
+                    "flow_state": handled_flow_state,
+                }
+                if handled_conversation_id:
+                    meta_payload["conversation_id"] = handled_conversation_id
+                yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
+                if handled_action:
+                    yield json.dumps({"type": "action", "value": handled_action}, ensure_ascii=False) + "\n"
+                if handled_answer:
+                    yield json.dumps({"type": "token", "value": handled_answer}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "citations", "value": []}, ensure_ascii=False) + "\n"
+                if handled_follow_up:
+                    yield json.dumps({"type": "follow_up", "value": handled_follow_up}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+
+            return _contact_events()
+
+        resolved_conversation_id, prior_history, _ = _resolve_chat_memory(
+            contact_result.get("conversation_id") or conversation_id,
+            history=history,
+        )
 
         _store_chat_message(resolved_conversation_id, "user", message)
-
-        employee_name_lookup_query = _extract_employee_name_lookup_query(message)
-        if employee_name_lookup_query:
-            lookup_answer, lookup_citations = _build_employee_name_lookup_answer(employee_name_lookup_query)
-
-            def _employee_lookup_events():
-                meta_payload = {"type": "meta"}
-                if resolved_conversation_id:
-                    meta_payload["conversation_id"] = resolved_conversation_id
-                yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "token", "value": lookup_answer}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "citations", "value": lookup_citations}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
-                _store_chat_message(resolved_conversation_id, "assistant", lookup_answer)
-
-            return _employee_lookup_events()
-
-        if _is_employee_query(message):
-            employee_answer, employee_citations = _build_employee_answer()
-
-            def _employee_events():
-                meta_payload = {"type": "meta"}
-                if resolved_conversation_id:
-                    meta_payload["conversation_id"] = resolved_conversation_id
-                yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "token", "value": employee_answer}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "citations", "value": employee_citations}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
-                _store_chat_message(resolved_conversation_id, "assistant", employee_answer)
-
-            return _employee_events()
 
         retrieval, retrieval_ms = _build_retrieval_result(message, prior_history)
 
         def _events():
             collected_tokens: list[str] = []
             try:
-                meta_payload = {"type": "meta"}
+                meta_payload = {
+                    "type": "meta",
+                    "route": "rag",
+                    "flow_state": contact_result.get("flow_state") or {"stage": "idle"},
+                }
                 if resolved_conversation_id:
                     meta_payload["conversation_id"] = resolved_conversation_id
                 yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
 
-                # fallback_answer = _fallback_answer_from_retrieval(message, retrieval)
-                # if fallback_answer:
-                #     _store_chat_message(resolved_conversation_id, "assistant", fallback_answer)
-                #     yield json.dumps({"type": "token", "value": fallback_answer}, ensure_ascii=False) + "\n"
-                #     yield json.dumps({"type": "citations", "value": retrieval["citations"]}, ensure_ascii=False) + "\n"
-                #     yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
-                #     return
+                if _should_fallback_to_unknown(retrieval):
+                    fallback_answer = "Maaf, saya belum menemukan informasi pastinya di knowledge yang tersedia."
+                    _store_chat_message(resolved_conversation_id, "assistant", fallback_answer)
+                    yield json.dumps({"type": "token", "value": fallback_answer}, ensure_ascii=False) + "\n"
+                    yield json.dumps({"type": "citations", "value": retrieval["citations"]}, ensure_ascii=False) + "\n"
+                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                    return
 
                 first_token_logged = False
-                for token in generate_answer_stream(message, retrieval["context"], history=prior_history):
+                for token in generate_answer_stream(
+                    message,
+                    retrieval["context"],
+                    history=prior_history,
+                    grounding_note=_build_grounding_note(retrieval),
+                ):
                     if not first_token_logged and token:
                         first_token_ms = (time.perf_counter() - started_at) * 1000
                         _logger.info(

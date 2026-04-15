@@ -150,9 +150,6 @@ Contoh body `POST /api/chat`:
 - `POST /api/admin/upload-documents`
 - `GET /api/admin/status`
 - `GET /api/admin/knowledge-summary`
-- `GET /api/admin/employees`
-- `POST /api/admin/employees`
-- `GET /api/admin/contact-messages`
 - `DELETE /api/admin/documents`
 
 ### Web + Health
@@ -204,6 +201,8 @@ Lalu lakukan reindex:
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/reindex
 ```
+
+Catatan: informasi karyawan untuk contact-flow dibaca dari dokumen knowledge (disarankan DOCX/PDF roster dengan kolom `Nama | Departemen | Jabatan | Nomor WA`).
 
 Jika ada isu HNSW Chroma (contoh `ef or M is too small`), jalankan rebuild:
 
