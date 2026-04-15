@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -5,7 +7,8 @@ from fastapi.templating import Jinja2Templates
 from api.web.service import WebPageService
 
 
-templates = Jinja2Templates(directory="templates")
+BASE_DIR = Path(__file__).resolve().parents[2]
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 router = APIRouter(tags=["web"])
 
 

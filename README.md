@@ -61,7 +61,7 @@ Bagian ini disusun agar siap dipakai untuk laporan teknis.
   - employee & contact message data (modul admin/chat)
 - Docker named volumes:
   - `vector_data` (persistensi Chroma)
-  - `chat_runtime` (persistensi SQLite runtime)
+- `./runtime` (persistensi SQLite runtime lokal)
 
 ### 6) Document Processing Libraries
 

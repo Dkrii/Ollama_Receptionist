@@ -55,6 +55,9 @@ class Settings(BaseModel):
     }
     contact_default_mode: str = os.getenv("CONTACT_DEFAULT_MODE", "notify").strip().lower()
     contact_call_mode: str = os.getenv("CONTACT_CALL_MODE", "dummy").strip().lower()
+    contact_call_api_url: str = os.getenv("CONTACT_CALL_API_URL", "").strip()
+    contact_call_api_key: str = os.getenv("CONTACT_CALL_API_KEY", "").strip()
+    contact_call_timeout_seconds: int = int(os.getenv("CONTACT_CALL_TIMEOUT_SECONDS", "15"))
     contact_message_delivery_mode: str = os.getenv("CONTACT_MESSAGE_DELIVERY_MODE", "dummy").strip().lower()
     whatsapp_api_base_url: str = os.getenv("WHATSAPP_API_BASE_URL", "").strip()
     whatsapp_api_key: str = os.getenv("WHATSAPP_API_KEY", "").strip()
