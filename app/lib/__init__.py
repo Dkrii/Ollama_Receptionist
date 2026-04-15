@@ -1,1 +1,1 @@
-"""External library adapters."""
+"""External integrations grouped by domain."""

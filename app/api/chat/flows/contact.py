@@ -16,7 +16,7 @@ from api.chat.intent import (
 from api.chat.repository import ChatRepository
 from api.chat.utils import normalize_text, store_chat_message
 from config import settings
-from lib.requests.contact_request_client import (
+from lib.contact import (
     dispatch_contact_message,
     normalize_contact_mode,
     queue_contact_call,
