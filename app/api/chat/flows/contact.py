@@ -238,13 +238,30 @@ def _search_employees(query: str, department_hint: str = "") -> list[dict]:
                 score -= 0.18
         scored.append((employee, score))
 
+    if not scored:
+        return []
+
     scored.sort(
         key=lambda item: (
             -item[1],
             _normalize_text(str(item[0].get("nama", ""))),
         )
     )
-    matches = [emp for emp, _ in scored]
+
+    top_score = float(scored[0][1])
+    min_score = 0.55 if not canonical_hint else 0.40
+    spread_limit = 0.18
+
+    filtered_scored = [
+        (employee, score)
+        for employee, score in scored
+        if score >= min_score and (top_score - score) <= spread_limit
+    ]
+
+    if not filtered_scored and top_score >= min_score:
+        filtered_scored = [scored[0]]
+
+    matches = [emp for emp, _ in filtered_scored]
 
     if canonical_hint:
         department_matches = [
@@ -279,6 +296,23 @@ def _format_employee_for_prompt(employee: dict) -> str:
 
 def _format_employee_name_department(employee: dict) -> str:
     return f"{employee['nama']} ({employee['departemen']})"
+
+
+def _build_candidate_question(candidates: list[dict], prefix: str) -> str:
+    candidate_names = [
+        _format_employee_name_department(item)
+        for item in candidates
+        if isinstance(item, dict) and item.get("nama")
+    ]
+    if not candidate_names:
+        return prefix + " Silakan sebutkan nama lengkap karyawan yang ingin dihubungi."
+    if len(candidate_names) == 1:
+        return prefix + f" Apakah {candidate_names[0]}?"
+    if len(candidate_names) == 2:
+        listed_names = f"{candidate_names[0]} atau {candidate_names[1]}"
+    else:
+        listed_names = ", ".join(candidate_names[:-1]) + f", atau {candidate_names[-1]}"
+    return prefix + f" Apakah {listed_names}?"
 
 
 def _same_contact_target(active_state: dict[str, Any], semantic_intent: dict[str, Any]) -> bool:
@@ -460,16 +494,17 @@ def _handle_await_disambiguation(ctx: dict) -> dict:
 
     selected = _resolve_disambiguation_choice(user_message, candidates)
     if not selected:
-        option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
-        answer = "Saya menemukan beberapa karyawan bernama serupa."
-        if len(option_names) == 1:
-            answer += f" Apakah {option_names[0]}?"
-        elif len(option_names) == 2:
-            answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
-        elif len(option_names) >= 3:
-            answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
-        else:
-            answer += " Silakan sebutkan nama lengkap karyawan yang ingin dihubungi."
+        if len(candidates) == 1 and isinstance(candidates[0], dict) and candidates[0].get("id"):
+            selected = candidates[0]
+            answer = f"Apakah Anda ingin menghubungi {_format_employee_for_prompt(selected)}?"
+            _store_chat_message(conversation_id, "assistant", answer)
+            return _build_contact_response(
+                answer=answer,
+                conversation_id=conversation_id,
+                flow_state=_state("await_confirmation", action=action, selected=selected),
+            )
+
+        answer = _build_candidate_question(candidates, "Saya menemukan beberapa kandidat yang mirip.")
         _store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(
             answer=answer,
@@ -621,6 +656,37 @@ def _handle_await_confirmation(ctx: dict) -> dict:
 
     current_intent = _classify_confirmation_text(user_message)
     if current_intent == "confirm_no":
+        if target_kind == "person" and isinstance(candidates, list) and len(candidates) > 1:
+            remaining_candidates = [
+                item for item in candidates
+                if str(item.get("id") or "") != str(selected.get("id") or "")
+            ]
+            if remaining_candidates:
+                if len(remaining_candidates) == 1 and isinstance(remaining_candidates[0], dict) and remaining_candidates[0].get("id"):
+                    fallback_selected = remaining_candidates[0]
+                    answer = f"Baik, bagaimana jika {_format_employee_for_prompt(fallback_selected)}?"
+                    _store_chat_message(conversation_id, "assistant", answer)
+                    return _build_contact_response(
+                        answer=answer,
+                        conversation_id=conversation_id,
+                        flow_state=_state(
+                            "await_confirmation",
+                            action=action,
+                            selected=fallback_selected,
+                            target_kind="person",
+                            candidates=remaining_candidates,
+                        ),
+                    )
+
+                answer = _build_candidate_question(remaining_candidates, "Baik, saya carikan kandidat lain yang paling mirip.")
+
+                _store_chat_message(conversation_id, "assistant", answer)
+                return _build_contact_response(
+                    answer=answer,
+                    conversation_id=conversation_id,
+                    flow_state=_state("await_disambiguation", action=action, candidates=remaining_candidates),
+                )
+
         answer = _build_cancel_contact_answer(selected, target_kind, department)
         _store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_state("idle"))
@@ -916,16 +982,8 @@ def _handle_new_contact_intent(ctx: dict) -> dict:
             flow_state=_state("await_confirmation", action=action, selected=selected, target_kind="person"),
         )
 
-    candidates = matches[:5]
-    option_names = [_format_employee_name_department(item) for item in candidates[:3] if item.get("nama")]
-    answer = "Saya menemukan beberapa karyawan bernama serupa."
-    if option_names:
-        if len(option_names) == 1:
-            answer += f" Apakah {option_names[0]}?"
-        elif len(option_names) == 2:
-            answer += f" Apakah {option_names[0]} atau {option_names[1]}?"
-        else:
-            answer += f" Apakah {option_names[0]}, {option_names[1]}, atau {option_names[2]}?"
+    candidates = matches
+    answer = _build_candidate_question(candidates, "Saya menemukan beberapa kandidat yang mirip.")
     _store_chat_message(conversation_id, "assistant", answer)
     return _build_contact_response(
         answer=answer,
