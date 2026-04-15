@@ -22,6 +22,10 @@ def _normalize_call_status(value: str | None) -> str:
         "unavailable": "unavailable",
         "offline": "unavailable",
         "not_available": "unavailable",
+        "no_response": "no_response",
+        "no_answer": "no_response",
+        "timeout": "no_response",
+        "missed": "no_response",
         "failed": "failed",
         "error": "failed",
         "rejected": "failed",
@@ -32,13 +36,27 @@ def _normalize_call_status(value: str | None) -> str:
 def queue_contact_call(*, employee: dict[str, Any]) -> dict[str, Any]:
     mode = str(getattr(settings, "contact_call_mode", "dummy") or "dummy").strip().lower()
     if mode == "dummy":
+        dummy_status = _normalize_call_status(getattr(settings, "contact_call_dummy_status", "no_response"))
+        if dummy_status == "connected":
+            detail = (
+                f"Saya sudah mencoba menghubungi {employee.get('nama', 'karyawan')} "
+                "dan panggilan berhasil tersambung."
+            )
+        elif dummy_status in {"busy", "unavailable", "no_response"}:
+            detail = (
+                f"Saya sudah mencoba menghubungi {employee.get('nama', 'karyawan')}, "
+                "tetapi belum ada respons."
+            )
+        else:
+            detail = f"Permintaan panggilan untuk {employee.get('nama', 'karyawan')} diterima di mode dummy."
         return {
             "provider": "dummy",
-            "status": "queued_dummy",
-            "detail": f"Permintaan panggilan untuk {employee.get('nama', 'karyawan')} diterima di mode dummy.",
+            "status": dummy_status,
+            "detail": detail,
             "provider_message_id": "",
             "provider_payload": {
                 "mode": mode,
+                "dummy_status": dummy_status,
                 "employee_id": employee.get("id"),
                 "employee_name": employee.get("nama"),
             },

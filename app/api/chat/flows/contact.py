@@ -209,7 +209,7 @@ def _resolve_contact_mode(intent_result: dict[str, Any], flow_state: dict[str, A
         saved = str(flow_state.get("action") or "").strip().lower()
         if saved in {"call", "notify"}:
             return saved
-    return normalize_contact_mode(None)
+    return "call"
 
 
 def _score_employee_match(employee: dict, query: str) -> float:
@@ -398,12 +398,12 @@ def _build_cancel_contact_answer(selected: dict | None, target_kind: str, depart
 def _build_unavailable_contact_answer(selected: dict, target_kind: str, department: str) -> str:
     if target_kind == "department" and department:
         return (
-            f"Saat ini tim {department} sedang tidak tersedia. "
+            f"Saya sudah mencoba menghubungi tim {department}, tetapi belum ada respons. "
             "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
         )
 
     return (
-        f"{selected['nama']} sedang tidak tersedia saat ini. "
+        f"Saya sudah mencoba menghubungi {selected['nama']}, tetapi belum ada respons. "
         "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
     )
 
@@ -471,11 +471,11 @@ def _build_contact_request_success_answer(selected: dict, action_result: dict[st
 
 
 def _is_unavailable_contact_status(status: str) -> bool:
-    return status in {"busy", "unavailable", "offline", "not_available"}
+    return status in {"busy", "unavailable", "offline", "not_available", "no_response"}
 
 
 def _is_successful_contact_status(status: str) -> bool:
-    return status in {"queued", "queued_dummy", "ringing", "connected", "sent", "sent_dummy"}
+    return status in {"queued", "ringing", "connected", "sent", "sent_dummy"}
 
 
 def _build_contact_response(

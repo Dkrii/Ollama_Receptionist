@@ -53,8 +53,8 @@ class Settings(BaseModel):
         "yes",
         "on",
     }
-    contact_default_mode: str = os.getenv("CONTACT_DEFAULT_MODE", "notify").strip().lower()
     contact_call_mode: str = os.getenv("CONTACT_CALL_MODE", "dummy").strip().lower()
+    contact_call_dummy_status: str = os.getenv("CONTACT_CALL_DUMMY_STATUS", "no_response").strip().lower()
     contact_call_api_url: str = os.getenv("CONTACT_CALL_API_URL", "").strip()
     contact_call_api_key: str = os.getenv("CONTACT_CALL_API_KEY", "").strip()
     contact_call_timeout_seconds: int = int(os.getenv("CONTACT_CALL_TIMEOUT_SECONDS", "15"))
