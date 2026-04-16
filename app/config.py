@@ -5,8 +5,7 @@ import os
 
 class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "development").strip().lower()
-    app_host: str = os.getenv("APP_HOST", "0.0.0.0")
-    app_port: int = int(os.getenv("APP_PORT", "8000"))
+    app_url: str = os.getenv("APP_URL", "").strip().rstrip("/")
 
     ai_provider: str = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 
@@ -54,8 +53,10 @@ class Settings(BaseModel):
         "yes",
         "on",
     }
-    contact_call_api_url: str = os.getenv("CONTACT_CALL_API_URL", "").strip()
-    contact_call_api_key: str = os.getenv("CONTACT_CALL_API_KEY", "").strip()
+    twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    twilio_api_key_sid: str = os.getenv("TWILIO_API_KEY_SID", "").strip()
+    twilio_api_key_secret: str = os.getenv("TWILIO_API_KEY_SECRET", "").strip()
+    twilio_twiml_app_sid: str = os.getenv("TWILIO_TWIML_APP_SID", "").strip()
     contact_call_from_number: str = os.getenv("CONTACT_CALL_FROM_NUMBER", "").strip()
     whatsapp_api_base_url: str = os.getenv("WHATSAPP_API_BASE_URL", "").strip()
     whatsapp_api_key: str = os.getenv("WHATSAPP_API_KEY", "").strip()
