@@ -118,11 +118,117 @@ const subtitlesBox = document.getElementById('subtitlesBox');
 const micBtn = document.getElementById('micBtn');
 const micHint = document.getElementById('micHint');
 const systemStatus = document.getElementById('systemStatus');
+const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
+const CONVERSATION_ACTIVITY_STORAGE_KEY = 'kioskConversationLastActivity';
+const SESSION_IDLE_MS = 5 * 60 * 1000;
 
 let isSending = false;
 let speechQueue = [];
 let isSpeakingQueue = false;
 let speechResidualBuffer = '';
+let conversationHistory = [];
+let sessionIdleTimer = null;
+let activeConversationId = '';
+let contactFlowState = { stage: 'idle' };
+
+function isStorageAvailable() {
+  return typeof window.sessionStorage !== 'undefined';
+}
+
+function readStoredConversationId() {
+  if (!isStorageAvailable()) return '';
+  return window.sessionStorage.getItem(CONVERSATION_ID_STORAGE_KEY) || '';
+}
+
+function readStoredActivityAt() {
+  if (!isStorageAvailable()) return 0;
+  return Number(window.sessionStorage.getItem(CONVERSATION_ACTIVITY_STORAGE_KEY) || 0);
+}
+
+function storeActivityNow() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.setItem(CONVERSATION_ACTIVITY_STORAGE_KEY, String(Date.now()));
+}
+
+function clearStoredConversationState() {
+  if (!isStorageAvailable()) return;
+  window.sessionStorage.removeItem(CONVERSATION_ID_STORAGE_KEY);
+  window.sessionStorage.removeItem(CONVERSATION_ACTIVITY_STORAGE_KEY);
+}
+
+function setActiveConversationId(value) {
+  activeConversationId = (value || '').trim();
+
+  if (!isStorageAvailable()) return;
+
+  if (activeConversationId) {
+    window.sessionStorage.setItem(CONVERSATION_ID_STORAGE_KEY, activeConversationId);
+    storeActivityNow();
+    return;
+  }
+
+  clearStoredConversationState();
+}
+
+function shouldResetStoredConversation() {
+  const storedConversationId = readStoredConversationId();
+  const lastActivityAt = readStoredActivityAt();
+  if (!storedConversationId || !lastActivityAt) return false;
+  return (Date.now() - lastActivityAt) >= SESSION_IDLE_MS;
+}
+
+function buildRequestHistory() {
+  return conversationHistory.slice(-6);
+}
+
+function appendConversationTurn(role, content) {
+  const text = (content || '').trim();
+  if (!text) return;
+  conversationHistory.push({ role, content: text });
+  if (conversationHistory.length > 12) {
+    conversationHistory = conversationHistory.slice(-12);
+  }
+  storeActivityNow();
+}
+
+function clearConversationState() {
+  clearTimeout(sessionIdleTimer);
+  conversationHistory = [];
+  contactFlowState = { stage: 'idle' };
+  clearStoredConversationState();
+  activeConversationId = '';
+  updateMicState();
+}
+
+
+
+
+function scheduleSessionIdleReset() {
+  clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = setTimeout(() => {
+    clearConversationState();
+    setThinkingStatus();
+    if (subtitlesBox) {
+      subtitlesBox.innerHTML = '';
+    }
+    const glassPanel = document.getElementById('glassPanel');
+    if (glassPanel) {
+      glassPanel.classList.remove('is-expanded');
+    }
+  }, SESSION_IDLE_MS);
+}
+
+function hydrateConversationState() {
+  if (shouldResetStoredConversation()) {
+    clearStoredConversationState();
+    return;
+  }
+
+  activeConversationId = readStoredConversationId();
+  if (activeConversationId) {
+    scheduleSessionIdleReset();
+  }
+}
 
 function setThinkingStatus(text = '') {
   if (!systemStatus) return;
@@ -159,17 +265,30 @@ function updateMicState() {
   if (micBtn) {
     micBtn.disabled = isSending || isSpeaking;
   }
+  if (micHint) {
+    micHint.textContent = 'Tahan untuk bicara';
+  }
 }
 
 // Speech Synthesis
-function speakText(text) {
-  if (!text || !window.speechSynthesis) return;
+function speakText(text, options = {}) {
+  const onEnd = typeof options.onEnd === 'function' ? options.onEnd : null;
+  if (!text || !window.speechSynthesis) {
+    if (onEnd) onEnd();
+    return;
+  }
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'id-ID';
   utter.onstart = updateMicState;
-  utter.onend = updateMicState;
-  utter.onerror = updateMicState;
+  utter.onend = () => {
+    updateMicState();
+    if (onEnd) onEnd();
+  };
+  utter.onerror = () => {
+    updateMicState();
+    if (onEnd) onEnd();
+  };
   window.speechSynthesis.speak(utter);
   updateMicState();
 }
@@ -236,6 +355,8 @@ async function sendMessage(message) {
   if (!message.trim()) return;
 
   isSending = true;
+  clearTimeout(sessionIdleTimer);
+  storeActivityNow();
   updateMicState();
   resetSpeechQueue();
   
@@ -252,7 +373,12 @@ async function sendMessage(message) {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({
+        message,
+        conversation_id: activeConversationId || null,
+        history: buildRequestHistory(),
+        flow_state: contactFlowState || { stage: 'idle' }
+      })
     });
 
     if (!response.ok) throw new Error('Gagal mendapatkan jawaban');
@@ -286,7 +412,15 @@ async function sendMessage(message) {
           event = JSON.parse(trimmed);
         } catch (parseError) { continue; }
         
-        if (event.type === 'token') {
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+          scheduleSessionIdleReset();
+        } else if (event.type === 'token') {
           const token = event.value || '';
           if (token) {
             setThinkingStatus();
@@ -303,6 +437,20 @@ async function sendMessage(message) {
       }
     }
 
+    if (buffer.trim()) {
+      try {
+        const event = JSON.parse(buffer.trim());
+        if (event.type === 'meta') {
+          setActiveConversationId(event.conversation_id || activeConversationId);
+          if (event.flow_state && typeof event.flow_state === 'object') {
+            contactFlowState = event.flow_state;
+          } else {
+            contactFlowState = { stage: 'idle' };
+          }
+        }
+      } catch (parseError) {}
+    }
+
     if (!finalAnswer.trim()) {
       finalAnswer = streamEventError || 'Maaf, saya tidak mengerti.';
       setSubtitle(finalAnswer, 'bot');
@@ -310,6 +458,9 @@ async function sendMessage(message) {
     } else {
       flushSpeechRemainder();
     }
+    appendConversationTurn('user', message);
+    appendConversationTurn('assistant', finalAnswer);
+    scheduleSessionIdleReset();
   } catch (err) {
     const fallback = 'Terjadi kesalahan sistem, mohon coba lagi.';
     setSubtitle(fallback, 'error');
@@ -324,6 +475,25 @@ async function sendMessage(message) {
 
 // STT Logic
 let micRecognition = null;
+let sttFinalTranscript = '';
+let sttInterimTranscript = '';
+let sttSubmitted = false;
+let sttStopRequested = false;
+
+function resetSttBuffers() {
+  sttFinalTranscript = '';
+  sttInterimTranscript = '';
+  sttSubmitted = false;
+  sttStopRequested = false;
+}
+
+function submitTranscriptIfAny() {
+  if (sttSubmitted) return;
+  const transcript = `${sttFinalTranscript} ${sttInterimTranscript}`.trim();
+  if (!transcript) return;
+  sttSubmitted = true;
+  sendMessage(transcript);
+}
 
 function setupSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -337,6 +507,7 @@ function setupSpeechRecognition() {
 
 function startRecording() {
   if (isSending || micRecognition) return;
+  resetSttBuffers();
   micRecognition = setupSpeechRecognition();
   if (!micRecognition) {
     alert('Speech recognition belum didukung browser ini.');
@@ -344,23 +515,36 @@ function startRecording() {
   }
 
   micRecognition.onresult = (event) => {
-    let finalTranscript = '';
+    sttInterimTranscript = '';
 
     for (let i = event.resultIndex; i < event.results.length; ++i) {
       if (event.results[i].isFinal) {
-        finalTranscript += event.results[i][0].transcript;
+        sttFinalTranscript += ` ${event.results[i][0].transcript}`;
+      } else {
+        sttInterimTranscript += ` ${event.results[i][0].transcript}`;
       }
     }
-    
-    // Auto-send when speech engine decides it's final
-    if (finalTranscript.trim() && event.results[event.results.length - 1].isFinal) {
-      sendMessage(finalTranscript);
-      try { micRecognition.stop(); } catch(e) {}
+
+    // Auto-send when engine already marks the latest chunk as final.
+    if (event.results[event.results.length - 1].isFinal) {
+      submitTranscriptIfAny();
+      try { micRecognition.stop(); } catch (e) {}
     }
   };
 
-  micRecognition.onerror = () => cleanupRecording();
-  micRecognition.onend = () => cleanupRecording();
+  micRecognition.onerror = (event) => {
+    const errorCode = String(event?.error || '').toLowerCase();
+    if (errorCode === 'aborted' && sttStopRequested) {
+      submitTranscriptIfAny();
+      cleanupRecording();
+      return;
+    }
+    cleanupRecording();
+  };
+  micRecognition.onend = () => {
+    submitTranscriptIfAny();
+    cleanupRecording();
+  };
 
   try {
     micRecognition.start();
@@ -378,14 +562,16 @@ function startRecording() {
 
 function stopRecording() {
   if (!micRecognition) return;
+  sttStopRequested = true;
   try { micRecognition.stop(); } catch (err) {}
-  cleanupRecording();
 }
 
 function cleanupRecording() {
   micBtn.classList.remove('is-recording');
-  micHint.textContent = "Tahan untuk bicara";
   micRecognition = null;
+  sttInterimTranscript = '';
+  sttStopRequested = false;
+  updateMicState();
 }
 
 // Event Listeners
@@ -398,3 +584,4 @@ micBtn.addEventListener('touchstart', (e) => {
 window.addEventListener('mouseup', () => { if (micRecognition) stopRecording(); });
 micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
 micBtn.addEventListener('touchcancel', (e) => { e.preventDefault(); stopRecording(); });
+hydrateConversationState();

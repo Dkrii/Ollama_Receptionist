@@ -1,80 +1,294 @@
-# Virtual Receptionist Kiosk (Docker + Ollama + Pure RAG)
+# Virtual Receptionist Kiosk
 
-## Stack
-- FastAPI (UI + API)
-- Ollama (`qwen2.5:3b` + `nomic-embed-text`)
-- ChromaDB
-- Browser-based STT/TTS (Web Speech API)
+Sistem resepsionis virtual berbasis RAG (Retrieval-Augmented Generation) untuk kebutuhan informasi perusahaan dan alur kontak karyawan.
 
-## 1) Setup
-1. Copy env file:
-   - `copy .env.example .env`
-2. Start infrastructure:
-   - `docker compose up -d ollama chroma app`
-3. Pull models:
-   - `docker compose run --rm init-model`
-4. Open app:
-   - `http://localhost:8000`
+## Ringkasan
 
-## 2) Add Knowledge
-Put your files into `knowledge/`:
+- Menyediakan UI kiosk/web, API chat, API admin, dan contact-flow berbasis state.
+- Menggunakan Ollama untuk LLM chat dan embedding.
+- Menggunakan ChromaDB untuk vector store knowledge base.
+- Menggunakan SQLite untuk memory percakapan dan log contact message.
+- Dijalankan via Docker Compose (service `app` + `chroma`, Ollama eksternal/host).
+
+---
+
+## Inventaris Tools, Framework, dan Library
+
+Bagian ini disusun agar siap dipakai untuk laporan teknis.
+
+### 1) Bahasa Pemrograman
+
+- Python 3.11 (base image `python:3.11-slim`)
+- JavaScript (frontend kiosk/dev/admin)
+- HTML + CSS (Jinja template + static assets)
+
+### 2) Backend Framework & API
+
+- FastAPI `0.116.1` (HTTP API + server-side web routing)
+- Uvicorn `0.35.0` (`uvicorn[standard]`) sebagai ASGI server
+- Starlette middleware (via FastAPI) untuk request logging
+- Pydantic (dipakai di konfigurasi dan schema payload)
+
+### 3) Frontend Layer
+
+- Jinja2 `3.1.6` untuk templating server-side
+- Static frontend assets di `app/static/`:
+  - `kiosk/` (UI resepsionis)
+  - `dev/` (halaman pengujian/dev)
+  - `admin/` (panel admin knowledge & employee)
+- Browser Web Speech API (STT/TTS client-side)
+
+### 4) AI / RAG Stack
+
+- Ollama (serving model lokal)
+  - Chat model default: `qwen2.5:3b`
+  - Embedding model default: `nomic-embed-text`
+- ChromaDB `0.5.23` sebagai vector database
+- RAG pipeline internal:
+  - document loader (`txt`, `md`, `pdf`, `docx`)
+  - chunking
+  - embedding
+  - semantic retrieval
+  - heuristic reranking
+  - context assembly
+  - answer generation (sync + stream)
+
+### 5) Data & Persistence
+
+- SQLite (file default: `/workspace/runtime/chat.sqlite3`)
+  - conversation history
+  - transcript retention
+  - employee & contact message data (modul admin/chat)
+- Docker named volumes:
+  - `vector_data` (persistensi Chroma)
+- `./runtime` (persistensi SQLite runtime lokal)
+
+### 6) Document Processing Libraries
+
+- `pypdf==5.9.0` (parsing PDF)
+- `python-docx==1.2.0` (parsing DOCX)
+
+### 7) HTTP / Integration Libraries
+
+- `requests==2.32.4`
+- `python-multipart==0.0.20` (upload file via form-data)
+
+### 8) DevOps, Runtime, dan Container Tools
+
+- Docker + Docker Compose
+- Container images/services:
+  - `python:3.11-slim` (app image)
+  - `chromadb/chroma:0.5.23` (vector DB)
+- Health check endpoint:
+  - App: `GET /health`
+  - Chroma heartbeat: `/api/v1/heartbeat`
+
+### 9) QA / Benchmarking Tools
+
+- Script benchmark internal: `qa/benchmark_chat.py`
+- Dataset uji: `qa/testset-10.json`
+- Output metrik: `qa/results/*.json` dan `qa/results/*.csv`
+- Template evaluasi before-after: `qa/before-after-template.md`
+
+### 10) Tools & Komponen Bawaan Python (dipakai di codebase)
+
+- `argparse`, `csv`, `json`, `logging`, `time`, `pathlib`, `sqlite3`, `re`, `typing`, `urllib`
+
+---
+
+## Arsitektur Sistem
+
+```text
+Browser (kiosk/dev/admin)
+  -> FastAPI (web routes + API routes)
+     -> Chat Service / Contact Flow Service
+        -> Ollama (chat + embedding)
+        -> ChromaDB (retrieval knowledge)
+        -> SQLite (conversation memory + contact logs)
+```
+
+Referensi detail alur: [docs/chat-rag-flow.md](docs/chat-rag-flow.md)
+
+---
+
+## Struktur Modul Utama
+
+- `app/main.py`: bootstrap FastAPI, router registration, lifespan init
+- `app/api/chat/`: chat route, schema, service, repository, intent
+- `app/api/admin/`: admin route/service/repository untuk knowledge & employee
+- `app/api/web/`: route halaman `/`, `/dev`, `/admin`
+- `app/rag/`: client, ingest, loader, retrieve, generate
+- `app/templates/`: template HTML Jinja
+- `app/static/`: JS/CSS frontend
+- `knowledge/`: sumber dokumen knowledge base
+- `runtime/`: penyimpanan SQLite lokal/dev
+- `qa/`: benchmark dan hasil evaluasi
+
+---
+
+## API Endpoints
+
+### Chat
+
+- `POST /api/chat`
+- `POST /api/chat/stream` (NDJSON streaming)
+- `POST /api/chat/contact-flow`
+
+Contoh body `POST /api/chat`:
+
+```json
+{
+  "message": "Jam operasional kantor?",
+  "conversation_id": null,
+  "history": []
+}
+```
+
+### Admin
+
+- `POST /api/reindex`
+- `POST /api/admin/upload-documents`
+- `GET /api/admin/status`
+- `GET /api/admin/knowledge-summary`
+- `DELETE /api/admin/documents`
+
+### Web + Health
+
+- `GET /` (kiosk)
+- `GET /dev`
+- `GET /admin`
+- `GET /health`
+
+---
+
+## Setup dan Menjalankan
+
+### Prasyarat
+
+- Docker Desktop aktif
+- Docker Compose tersedia
+- Ollama host aktif (default di `http://host.docker.internal:11434` dari container)
+
+### Langkah Setup
+
+1. Salin environment file
+
+```powershell
+copy .env.example .env
+```
+
+2. Jalankan service
+
+```powershell
+docker compose up -d
+```
+
+3. Buka aplikasi
+
+- `http://localhost:8000`
+
+### Menambahkan Knowledge
+
+Tempatkan file di folder `knowledge/` dengan format:
+
 - `.txt`
 - `.md`
 - `.pdf`
 - `.docx`
 
-Then reindex:
-- `POST http://localhost:8000/api/reindex`
-- PowerShell: `Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/reindex`
+Lalu lakukan reindex:
 
-## 3) Chat API
-`POST /api/chat`
-
-Body:
-```json
-{
-  "message": "Jam operasional kantor?"
-}
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/reindex
 ```
 
-Response:
-```json
-{
-  "answer": "...",
-  "citations": [
-    {
-      "content": "...",
-      "metadata": { "source": "faq.txt", "path": "...", "chunk_index": 0 },
-      "score": 0.81
-    }
-  ]
-}
+Catatan: informasi karyawan untuk contact-flow dibaca dari dokumen knowledge (disarankan DOCX/PDF roster dengan kolom `Nama | Departemen | Jabatan | Nomor WA`).
+
+Jika ada isu HNSW Chroma (contoh `ef or M is too small`), jalankan rebuild:
+
+```powershell
+docker compose exec app python scripts/rebuild_chroma_collection.py --validate-query "Jam operasional kantor?"
 ```
 
-## 4) Pure RAG Rules
-- Jawaban hanya dari konteks hasil retrieval.
-- Jika konteks tidak cukup, jawaban fallback:
-  - `Maaf, saya belum menemukan informasi itu di knowledge base kami.`
+---
 
-## 5) Notes
-- STT/TTS dijalankan di browser (lebih stabil di Windows Docker Desktop).
-- Port aplikasi di-bind ke localhost (`127.0.0.1:8000`).
-- Source code `app/` di-mount ke container `kiosk-app`, jadi perubahan HTML/CSS/JS langsung terbaca tanpa `docker compose build app`.
-- Jika mengubah dependency Python (`requirements.txt`), tetap perlu rebuild image app.
+## Konfigurasi Penting (.env)
 
-### Latency tuning (tetap pakai `qwen2.5:3b`)
-- `RAG_TOP_K=3` untuk mengurangi jumlah chunk yang diproses model.
-- `RAG_MAX_CONTEXT_CHARS=3200` untuk membatasi panjang konteks.
-- `OLLAMA_NUM_PREDICT=160` untuk membatasi panjang jawaban default.
-- `OLLAMA_NUM_CTX=2048` untuk menurunkan beban context window.
-- `OLLAMA_NUM_THREAD=0` biarkan otomatis, atau isi jumlah core CPU jika ingin pinning manual.
+Parameter utama yang sering dipakai tuning:
 
-### Fallback policy
-- `RAG_FALLBACK_POLICY=context_only` (default): selama retrieval menemukan konteks, AI tetap menjawab dari konteks.
-- `RAG_FALLBACK_POLICY=strict`: aktifkan fallback agresif untuk pertanyaan/jawaban yang dinilai kurang relevan.
+- `OLLAMA_CHAT_MODEL`, `OLLAMA_EMBED_MODEL`
+- `OLLAMA_NUM_PREDICT`, `OLLAMA_NUM_PREDICT_SHORT`, `OLLAMA_NUM_PREDICT_LONG`
+- `OLLAMA_NUM_CTX`, `OLLAMA_NUM_THREAD`
+- `RAG_TOP_K`, `RAG_SCORE_THRESHOLD`, `RAG_MAX_CONTEXT_CHARS`
+- `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`
+- `CHROMA_COLLECTION`, `CHROMA_HNSW_M`, `CHROMA_HNSW_CONSTRUCTION_EF`, `CHROMA_HNSW_SEARCH_EF`
+- `CHAT_DB_PATH`, `CHAT_SESSION_IDLE_MINUTES`, `CHAT_RECENT_TURNS`, `CHAT_HISTORY_MAX_CHARS`, `CHAT_TRANSCRIPT_RETENTION_DAYS`
 
-## 6) Windows Kiosk Mode (Manual)
+---
 
-- Start stack: `docker compose up -d ollama chroma app`
-- Open UI: `http://localhost:8000`
-- Stop stack: `docker compose stop app chroma ollama`
+## Contact Flow (State Machine)
+
+State aktif yang dipakai pada alur hubungi karyawan:
+
+- `await_disambiguation`
+- `await_confirmation`
+- `contacting_unavailable_pending`
+- `await_unavailable_choice`
+- `await_waiter_name`
+- `await_message_name`
+- `await_message_goal`
+
+Kemampuan utama contact flow:
+
+- deteksi intent hubungi karyawan/divisi
+- pencarian kandidat berdasarkan nama/divisi
+- disambiguasi kandidat
+- konfirmasi ya/tidak
+- fallback saat user keluar konteks konfirmasi
+- simulasi aksi `notify`/`call` dan pencatatan pesan visitor
+
+---
+
+## Benchmark dan Pelaporan
+
+Jalankan benchmark 10 query:
+
+```powershell
+python qa/benchmark_chat.py --tag before
+python qa/benchmark_chat.py --tag after
+```
+
+Output:
+
+- JSON: `qa/results/benchmark-<tag>.json`
+- CSV: `qa/results/benchmark-<tag>.csv`
+
+Metrik utama yang direkam:
+
+- jumlah query sukses/gagal
+- `ttft_ms_p50`, `ttft_ms_p95`
+- `total_ms_p50`, `total_ms_p95`, `total_ms_avg`
+- jumlah query yang diprobe ke contact flow
+- jumlah query yang benar-benar di-handle contact flow
+
+Untuk laporan komparatif, gunakan template:
+
+- `qa/before-after-template.md`
+
+---
+
+## Operasional Harian (Windows)
+
+- Start: `docker compose up -d`
+- Stop: `docker compose stop app chroma`
+- Lihat logs app: `docker compose logs -f app`
+- Cek health: `http://localhost:8000/health`
+
+---
+
+## Catatan Implementasi
+
+- Source `app/` di-mount sebagai volume ke container app.
+- Runtime chat SQLite dipisahkan di volume named agar lebih stabil.
+- Backend dijalankan tanpa auto-reload di container untuk konsistensi runtime.
+- STT/TTS dijalankan di browser untuk kompatibilitas kiosk.

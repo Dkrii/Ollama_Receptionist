@@ -5,6 +5,12 @@ services:
     restart: unless-stopped
     volumes:
       - vector_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
     networks:
       - kiosk-net
 
@@ -16,15 +22,19 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       KNOWLEDGE_DIR: /workspace/knowledge
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      # OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       chroma:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./app:/app
       - ./knowledge:/workspace/knowledge
+      - ./runtime:/workspace/runtime
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -41,4 +51,5 @@ volumes:
 
 networks:
   kiosk-net:
+    name: kiosk-net
     driver: bridge

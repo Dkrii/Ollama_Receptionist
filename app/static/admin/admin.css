@@ -412,6 +412,11 @@ body.vr-admin-page {
 
 .vr-knowledge-recent {
   margin-top: 16px;
+  border: 1px solid var(--k-line);
+  border-radius: 12px;
+  background: var(--k-surface);
+  box-shadow: var(--k-shadow-soft);
+  padding: 16px;
 }
 
 .vr-knowledge-recent__head {
@@ -453,6 +458,39 @@ body.vr-admin-page {
   border-radius: 12px;
   overflow: auto;
   background: #ffffff;
+}
+.vr-employee-card,
+.vr-employee-table-card {
+  margin-top: 16px;
+}
+.vr-employee-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.vr-employee-field {
+  display: grid;
+  gap: 8px;
+}
+.vr-employee-field span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2a4356;
+}
+.vr-employee-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d3e0ec;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--k-text-main);
+  font-size: 14px;
+  padding: 11px 12px;
+}
+.vr-employee-field input:focus {
+  outline: none;
+  border-color: var(--k-akeb-blue);
+  box-shadow: 0 0 0 3px rgba(0, 91, 159, 0.13);
 }
 
 .vr-knowledge-table {
@@ -511,6 +549,47 @@ body.vr-admin-page {
 
 .vr-knowledge-table td:first-child {
   font-weight: 600;
+}
+
+.vr-recipient-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid #c4dbef;
+  background: #edf6ff;
+  color: #235177;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.vr-knowledge-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.vr-knowledge-delete {
+  border: 1px solid #f1c7cb;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: #fff3f4;
+  color: #a32832;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.vr-knowledge-delete:hover:not(:disabled) {
+  background: #ffe5e7;
+  border-color: #e79aa2;
+}
+
+.vr-knowledge-delete:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .vr-knowledge-list__empty.is-hidden {
@@ -616,6 +695,7 @@ body.vr-admin-page {
 }
 
 .vr-knowledge-list__empty {
+  margin-top: 10px;
   border: 1px dashed #cfdde9;
   border-radius: 10px;
   padding: 9px 10px;

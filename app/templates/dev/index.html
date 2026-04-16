@@ -6,58 +6,42 @@
   <title>Virtual Receptionist Kiosk</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/dev/dev.css?v=20260401-1" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/dev/dev.css?v=20260408-8" />
 </head>
 <body>
-  <main class="vr-layout">
-    <section class="vr-shell" aria-label="Virtual receptionist kiosk">
-      <aside class="vr-showcase" aria-label="Assistant animation panel">
-        <p class="vr-showcase__eyebrow">Assistant Live</p>
-        <h1 class="vr-showcase__title">Virtual Receptionist</h1>
-        <p class="vr-showcase__subtitle">Respon cepat untuk pertanyaan operasional, layanan, dan informasi kantor.</p>
+  <main id="kioskRoot" class="kiosk-container">
+    <header class="kiosk-topbar" aria-label="Status deteksi wajah">
+      <div class="kiosk-logo" aria-label="Akebono">AKEBONO</div>
+      <div id="faceIndicator" class="kiosk-face-indicator is-searching" role="status" aria-live="polite">
+        <span class="kiosk-face-indicator__dot" aria-hidden="true"></span>
+        <span id="faceIndicatorText">Mencari wajah...</span>
+      </div>
+    </header>
 
-        <div class="vr-orbit" aria-hidden="true">
-          <span class="vr-orbit__ring vr-orbit__ring--one"></span>
-          <span class="vr-orbit__ring vr-orbit__ring--two"></span>
-          <span class="vr-orbit__core"></span>
-          <span class="vr-orbit__pulse"></span>
-        </div>
+    <div class="kiosk-bg" aria-hidden="true">
+      <div class="kiosk-bg__image"></div>
+      <div class="kiosk-bg__overlay"></div>
+      <span class="kiosk-bg__orb kiosk-bg__orb--teal"></span>
+      <span class="kiosk-bg__orb kiosk-bg__orb--gold"></span>
+      <span class="kiosk-bg__orb kiosk-bg__orb--violet"></span>
+    </div>
 
-        <ul class="vr-showcase__highlights">
-          <li>Realtime chat assistant</li>
-          <li>Voice input cepat</li>
-          <li>Jawaban berbasis knowledge</li>
-        </ul>
-
-        <div class="vr-showcase__debug">
-          <h3 class="vr-showcase__debug-title">AI Debug Stats</h3>
-          <ul id="debugStats" class="vr-showcase__debug-list"></ul>
-        </div>
-      </aside>
-
-      <section class="vr-chatboard" aria-label="Chat workspace">
-        <header class="vr-chatboard__header">
-          <div>
-            <p class="vr-chatboard__eyebrow">Virtual Receptionist</p>
-            <h2 class="vr-chatboard__title">Percakapan</h2>
-          </div>
-        </header>
-
-        <section id="chatBox" class="vr-chat" aria-live="polite"></section>
-
-        <section class="vr-composer">
-          <label class="vr-composer__label" for="messageInput">Pertanyaan Anda</label>
-          <textarea id="messageInput" class="vr-composer__input" placeholder="Contoh: Jam operasional kantor?" aria-label="Ketik pertanyaan"></textarea>
-          <div class="vr-composer__actions">
-            <button id="sendBtn" class="vr-button vr-button--primary" type="button">Kirim</button>
-            <button id="micBtn" class="vr-button vr-button--mic" type="button" aria-label="Input suara">🎤</button>
-          </div>
-        </section>
-      </section>
+    <section class="kiosk-stage" aria-hidden="true">
+      <div class="kiosk-stage__halo"></div>
+      <div class="kiosk-stage__floor"></div>
+      <img id="kioskAvatar" src="/static/kiosk/models/IDLE.png" alt="Virtual Receptionist" class="kiosk-avatar" />
+      <video id="faceCamera" class="kiosk-camera" autoplay muted playsinline></video>
     </section>
+
+    <section id="chatTray" class="kiosk-chat-tray" aria-live="polite" aria-label="Percakapan virtual receptionist">
+      <div id="chatBox" class="chat-history" aria-live="polite"></div>
+    </section>
+
+    <section id="debugRuntime" class="kiosk-debug" aria-live="polite" aria-label="Runtime debug info"></section>
+    <ul id="debugStats" hidden></ul>
   </main>
 
-  <script src="/static/dev/dev.js?v=20260401-1"></script>
+  <script src="/static/dev/dev.js?v=20260408-9"></script>
 </body>
 </html>

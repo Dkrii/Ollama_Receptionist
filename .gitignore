@@ -8,3 +8,7 @@ __pycache__/
 chroma_data/
 knowledge/*.tmp
 knowledge/uploads/
+runtime/*.sqlite3
+runtime/*.sqlite3-shm
+runtime/*.sqlite3-wal
+

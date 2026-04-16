@@ -1,7 +1,13 @@
+import hashlib
 from pathlib import Path
 from typing import List, Dict
 
 from docx import Document
+from docx.document import Document as DocxDocument
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table, _Cell
+from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
 
@@ -17,9 +23,65 @@ def _read_pdf(path: Path) -> str:
     return "\n".join((page.extract_text() or "") for page in reader.pages)
 
 
+def _iter_docx_blocks(parent):
+    if isinstance(parent, DocxDocument):
+        parent_element = parent.element.body
+    elif isinstance(parent, _Cell):
+        parent_element = parent._tc
+    else:
+        raise TypeError(f"Unsupported parent type: {type(parent)!r}")
+
+    for child in parent_element.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+
+def _normalize_docx_text(text: str) -> str:
+    return " ".join((text or "").split()).strip()
+
+
+def _read_docx_table(table: Table) -> list[str]:
+    rows: list[str] = []
+    for row in table.rows:
+        cells: list[str] = []
+        for cell in row.cells:
+            cell_parts: list[str] = []
+            for block in _iter_docx_blocks(cell):
+                if isinstance(block, Paragraph):
+                    text = _normalize_docx_text(block.text)
+                    if text:
+                        cell_parts.append(text)
+                else:
+                    nested_rows = _read_docx_table(block)
+                    if nested_rows:
+                        cell_parts.append(" ; ".join(nested_rows))
+
+            cell_text = " ".join(cell_parts).strip()
+            if cell_text:
+                cells.append(cell_text)
+
+        if cells:
+            rows.append(" | ".join(cells))
+
+    return rows
+
+
 def _read_docx(path: Path) -> str:
     doc = Document(str(path))
-    return "\n".join(p.text for p in doc.paragraphs)
+    parts: list[str] = []
+
+    for block in _iter_docx_blocks(doc):
+        if isinstance(block, Paragraph):
+            text = _normalize_docx_text(block.text)
+            if text:
+                parts.append(text)
+            continue
+
+        parts.extend(_read_docx_table(block))
+
+    return "\n".join(parts)
 
 
 def read_document(path: Path) -> str:
@@ -41,23 +103,60 @@ def list_documents(knowledge_dir: Path) -> List[Path]:
     return sorted(documents)
 
 
+def _normalize_paragraphs(text: str) -> List[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
-    cleaned = "\n".join(line.strip() for line in text.splitlines() if line.strip())
-    if not cleaned:
+    paragraphs = _normalize_paragraphs(text)
+    if not paragraphs:
         return []
 
     chunks: List[str] = []
-    start = 0
-    length = len(cleaned)
+    current_parts: List[str] = []
+    current_length = 0
 
-    while start < length:
-        end = min(start + chunk_size, length)
-        chunk = cleaned[start:end]
-        if chunk:
-            chunks.append(chunk)
-        if end >= length:
-            break
-        start = max(0, end - overlap)
+    for paragraph in paragraphs:
+        paragraph_length = len(paragraph)
+
+        if paragraph_length >= chunk_size:
+            if current_parts:
+                chunks.append("\n".join(current_parts))
+                current_parts = []
+                current_length = 0
+
+            start = 0
+            while start < paragraph_length:
+                end = min(start + chunk_size, paragraph_length)
+                piece = paragraph[start:end].strip()
+                if piece:
+                    chunks.append(piece)
+                if end >= paragraph_length:
+                    break
+                start = max(0, end - overlap)
+            continue
+
+        projected_length = current_length + paragraph_length + (1 if current_parts else 0)
+        if projected_length > chunk_size and current_parts:
+            chunks.append("\n".join(current_parts))
+
+            overlap_parts: List[str] = []
+            overlap_length = 0
+            for part in reversed(current_parts):
+                part_length = len(part) + (1 if overlap_parts else 0)
+                if overlap_parts and overlap_length + part_length > overlap:
+                    break
+                overlap_parts.insert(0, part)
+                overlap_length += part_length
+
+            current_parts = overlap_parts
+            current_length = sum(len(part) for part in current_parts) + max(0, len(current_parts) - 1)
+
+        current_parts.append(paragraph)
+        current_length += paragraph_length + (1 if len(current_parts) > 1 else 0)
+
+    if current_parts:
+        chunks.append("\n".join(current_parts))
 
     return chunks
 
@@ -65,11 +164,12 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
 def build_chunks(path: Path, text: str, chunk_size: int, overlap: int) -> List[Dict]:
     chunks = chunk_text(text, chunk_size, overlap)
     records: List[Dict] = []
+    path_fingerprint = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:16]
 
     for idx, chunk in enumerate(chunks):
         records.append(
             {
-                "id": f"{path.name}:{idx}",
+                "id": f"{path.name}:{path_fingerprint}:{idx}",
                 "content": chunk,
                 "metadata": {
                     "source": str(path.name),
