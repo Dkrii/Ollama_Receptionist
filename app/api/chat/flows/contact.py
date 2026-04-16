@@ -60,6 +60,12 @@ _WAIT_PATTERNS = (
     r"\bwait\b",
     r"\blobby\b",
 )
+_EXPLICIT_NOTIFY_PATTERNS = _LEAVE_MESSAGE_PATTERNS + (
+    r"\bwhatsapp\b",
+    r"\bwa\b",
+    r"\bkirim(?:kan)? pesan\b",
+    r"\bchat\b",
+)
 
 
 # ============================================================================
@@ -200,10 +206,23 @@ def _update_flow_context_from_intent(
     return context
 
 
-def _resolve_contact_mode(intent_result: dict[str, Any], flow_state: dict[str, Any] | None = None) -> str:
+def _is_explicit_notify_request(message: str) -> bool:
+    normalized = normalize_text(message)
+    if not normalized:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _EXPLICIT_NOTIFY_PATTERNS)
+
+
+def _resolve_contact_mode(
+    intent_result: dict[str, Any],
+    flow_state: dict[str, Any] | None = None,
+    user_message: str = "",
+) -> str:
     intent_mode = normalize_contact_mode(intent_result.get("contact_mode"))
-    if intent_mode in {"call", "notify"}:
-        return intent_mode
+    if intent_mode == "call":
+        return "call"
+    if intent_mode == "notify" and _is_explicit_notify_request(user_message):
+        return "notify"
 
     if isinstance(flow_state, dict):
         saved = str(flow_state.get("action") or "").strip().lower()
@@ -533,19 +552,59 @@ def _resolve_disambiguation_selection(message: str, candidates: list[dict]) -> d
 
 def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
     if action == "call":
-        dispatch_result = queue_contact_call(employee=employee)
+        stored_call: dict[str, Any] | None = None
+        try:
+            stored_call = AdminRepository.create_contact_call(
+                employee_id=int(employee["id"]),
+                employee_nama=str(employee["nama"]),
+                employee_departemen=str(employee["departemen"]),
+                employee_nomor_wa=str(employee["nomor_wa"]),
+                call_status="queued",
+                call_detail="Menunggu dispatcher call.",
+                call_provider=str(getattr(settings, "contact_call_mode", "dummy") or "dummy"),
+            )
+            dispatch_result = queue_contact_call(employee=employee)
+            delivered_payload = AdminRepository.update_contact_call_status(
+                call_id=int(stored_call["id"]),
+                call_status=str(dispatch_result.get("status") or "queued"),
+                call_detail=str(dispatch_result.get("detail") or "Permintaan panggilan sedang diproses."),
+                call_provider=str(dispatch_result.get("provider") or "dummy"),
+                provider_call_id=str(
+                    dispatch_result.get("provider_call_id")
+                    or dispatch_result.get("provider_message_id")
+                    or ""
+                ),
+                provider_payload=dispatch_result.get("provider_payload"),
+                mark_connected=str(dispatch_result.get("status") or "").strip().lower() == "connected",
+            )
+        except Exception:
+            if stored_call and stored_call.get("id"):
+                try:
+                    AdminRepository.update_contact_call_status(
+                        call_id=int(stored_call["id"]),
+                        call_status="failed",
+                        call_detail="Dispatcher call gagal dijalankan.",
+                        call_provider=str(getattr(settings, "contact_call_mode", "dummy") or "dummy"),
+                        provider_payload={"error": "dispatch_failed"},
+                        mark_connected=False,
+                    )
+                except Exception:
+                    _logger.exception("chat.contact call failure update failed")
+            raise
+
         return {
             "type": "call",
-            "status": dispatch_result["status"],
-            "provider": dispatch_result["provider"],
+            "status": str((delivered_payload or {}).get("call_status") or dispatch_result.get("status") or "queued"),
+            "provider": str((delivered_payload or {}).get("call_provider") or dispatch_result.get("provider") or "dummy"),
             "employee": {
                 "id": employee["id"],
                 "nama": employee["nama"],
                 "departemen": employee["departemen"],
                 "jabatan": employee["jabatan"],
             },
-            "detail": dispatch_result["detail"],
+            "detail": str((delivered_payload or {}).get("call_detail") or dispatch_result.get("detail") or ""),
             "provider_payload": dispatch_result.get("provider_payload"),
+            "call": delivered_payload,
         }
 
     return {
@@ -1188,7 +1247,7 @@ def handle_contact_flow(
         if should_probe_intent_llm
         else _default_semantic_intent()
     )
-    action = _resolve_contact_mode(semantic_intent, safe_flow_state)
+    action = _resolve_contact_mode(semantic_intent, safe_flow_state, user_message)
     flow_context = _update_flow_context_from_intent(base_context, semantic_intent)
 
     if not user_message:

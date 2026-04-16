@@ -53,6 +53,7 @@ def queue_contact_call(*, employee: dict[str, Any]) -> dict[str, Any]:
             "provider": "dummy",
             "status": dummy_status,
             "detail": detail,
+            "provider_call_id": "",
             "provider_message_id": "",
             "provider_payload": {
                 "mode": mode,
@@ -112,6 +113,7 @@ def queue_contact_call(*, employee: dict[str, Any]) -> dict[str, Any]:
         "provider": "contact_call_api",
         "status": normalized_status,
         "detail": detail,
+        "provider_call_id": provider_message_id,
         "provider_message_id": provider_message_id,
         "provider_payload": provider_payload,
     }

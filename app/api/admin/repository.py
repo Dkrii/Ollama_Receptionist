@@ -63,6 +63,40 @@ class AdminRepository:
         )
 
     @staticmethod
+    def _create_contact_calls_table(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS contact_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER NOT NULL,
+                employee_nama TEXT NOT NULL,
+                employee_departemen TEXT NOT NULL,
+                employee_nomor_wa TEXT NOT NULL,
+                call_status TEXT NOT NULL,
+                call_detail TEXT NOT NULL,
+                call_provider TEXT NOT NULL DEFAULT 'dummy',
+                provider_call_id TEXT,
+                provider_payload TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                connected_at TEXT
+            );
+            """
+        )
+
+    @staticmethod
+    def _create_contact_calls_indexes(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_contact_calls_employee_id
+            ON contact_calls(employee_id);
+
+            CREATE INDEX IF NOT EXISTS idx_contact_calls_created_at
+            ON contact_calls(created_at DESC);
+            """
+        )
+
+    @staticmethod
     def _migrate_contact_messages_without_fk(connection: sqlite3.Connection) -> None:
         AdminRepository._create_contact_messages_table(connection, table_name="contact_messages_migrated")
         connection.execute(
@@ -148,6 +182,27 @@ class AdminRepository:
         }
 
     @staticmethod
+    def _row_to_contact_call(row: sqlite3.Row | None) -> dict | None:
+        if not row:
+            return None
+
+        return {
+            "id": row["id"],
+            "employee_id": row["employee_id"],
+            "employee_nama": row["employee_nama"],
+            "employee_departemen": row["employee_departemen"],
+            "employee_nomor_wa": row["employee_nomor_wa"],
+            "call_status": row["call_status"],
+            "call_detail": row["call_detail"],
+            "call_provider": row["call_provider"],
+            "provider_call_id": row["provider_call_id"],
+            "provider_payload": row["provider_payload"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "connected_at": row["connected_at"],
+        }
+
+    @staticmethod
     def _fetch_contact_message(connection: sqlite3.Connection, message_id: int) -> dict | None:
         row = connection.execute(
             """
@@ -177,6 +232,31 @@ class AdminRepository:
         return AdminRepository._row_to_contact_message(row)
 
     @staticmethod
+    def _fetch_contact_call(connection: sqlite3.Connection, call_id: int) -> dict | None:
+        row = connection.execute(
+            """
+            SELECT
+                id,
+                employee_id,
+                employee_nama,
+                employee_departemen,
+                employee_nomor_wa,
+                call_status,
+                call_detail,
+                call_provider,
+                provider_call_id,
+                provider_payload,
+                created_at,
+                updated_at,
+                connected_at
+            FROM contact_calls
+            WHERE id = ?
+            """,
+            (call_id,),
+        ).fetchone()
+        return AdminRepository._row_to_contact_call(row)
+
+    @staticmethod
     def initialize() -> None:
         settings.chat_db_path.parent.mkdir(parents=True, exist_ok=True)
         if not settings.chat_db_path.exists():
@@ -200,6 +280,8 @@ class AdminRepository:
 
             AdminRepository._ensure_contact_messages_columns(connection)
             AdminRepository._create_contact_messages_indexes(connection)
+            AdminRepository._create_contact_calls_table(connection)
+            AdminRepository._create_contact_calls_indexes(connection)
             connection.execute("DROP TABLE IF EXISTS employees")
 
     @staticmethod
@@ -346,6 +428,137 @@ class AdminRepository:
             return AdminRepository._fetch_contact_message(connection, message_id)
 
     @staticmethod
+    def create_contact_call(
+        *,
+        employee_id: int,
+        employee_nama: str,
+        employee_departemen: str,
+        employee_nomor_wa: str,
+        call_status: str,
+        call_detail: str,
+        call_provider: str = "dummy",
+        provider_call_id: str | None = None,
+        provider_payload: dict[str, Any] | list[Any] | str | None = None,
+    ) -> dict:
+        timestamp = _utc_now_iso()
+        provider_payload_text: str | None
+        if isinstance(provider_payload, (dict, list)):
+            provider_payload_text = json.dumps(provider_payload, ensure_ascii=False)
+        elif provider_payload is None:
+            provider_payload_text = None
+        else:
+            provider_payload_text = str(provider_payload)
+
+        with closing(AdminRepository._connect()) as connection, connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO contact_calls (
+                    employee_id,
+                    employee_nama,
+                    employee_departemen,
+                    employee_nomor_wa,
+                    call_status,
+                    call_detail,
+                    call_provider,
+                    provider_call_id,
+                    provider_payload,
+                    created_at,
+                    updated_at,
+                    connected_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    employee_id,
+                    employee_nama,
+                    employee_departemen,
+                    employee_nomor_wa,
+                    call_status,
+                    call_detail,
+                    call_provider,
+                    provider_call_id,
+                    provider_payload_text,
+                    timestamp,
+                    timestamp,
+                    None,
+                ),
+            )
+            call_id = cursor.lastrowid
+            stored = AdminRepository._fetch_contact_call(connection, int(call_id))
+
+        return stored or {}
+
+    @staticmethod
+    def update_contact_call_status(
+        *,
+        call_id: int,
+        call_status: str,
+        call_detail: str,
+        call_provider: str,
+        provider_call_id: str | None = None,
+        provider_payload: dict[str, Any] | list[Any] | str | None = None,
+        mark_connected: bool = False,
+    ) -> dict | None:
+        timestamp = _utc_now_iso()
+        provider_payload_text: str | None
+        if isinstance(provider_payload, (dict, list)):
+            provider_payload_text = json.dumps(provider_payload, ensure_ascii=False)
+        elif provider_payload is None:
+            provider_payload_text = None
+        else:
+            provider_payload_text = str(provider_payload)
+
+        with closing(AdminRepository._connect()) as connection, connection:
+            if mark_connected:
+                connection.execute(
+                    """
+                    UPDATE contact_calls
+                    SET call_status = ?,
+                        call_detail = ?,
+                        call_provider = ?,
+                        provider_call_id = ?,
+                        provider_payload = ?,
+                        updated_at = ?,
+                        connected_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        call_status,
+                        call_detail,
+                        call_provider,
+                        provider_call_id,
+                        provider_payload_text,
+                        timestamp,
+                        timestamp,
+                        call_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE contact_calls
+                    SET call_status = ?,
+                        call_detail = ?,
+                        call_provider = ?,
+                        provider_call_id = ?,
+                        provider_payload = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        call_status,
+                        call_detail,
+                        call_provider,
+                        provider_call_id,
+                        provider_payload_text,
+                        timestamp,
+                        call_id,
+                    ),
+                )
+
+            return AdminRepository._fetch_contact_call(connection, call_id)
+
+    @staticmethod
     def mark_contact_message_sent_dummy(*, message_id: int, delivery_detail: str) -> dict | None:
         return AdminRepository.update_contact_message_delivery(
             message_id=message_id,
@@ -389,3 +602,32 @@ class AdminRepository:
             ).fetchall()
 
         return [AdminRepository._row_to_contact_message(row) for row in rows if row]
+
+    @staticmethod
+    def list_contact_calls(limit: int = 50) -> list[dict]:
+        safe_limit = max(1, min(int(limit or 50), 200))
+        with closing(AdminRepository._connect()) as connection, connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    employee_id,
+                    employee_nama,
+                    employee_departemen,
+                    employee_nomor_wa,
+                    call_status,
+                    call_detail,
+                    call_provider,
+                    provider_call_id,
+                    provider_payload,
+                    created_at,
+                    updated_at,
+                    connected_at
+                FROM contact_calls
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+
+        return [AdminRepository._row_to_contact_call(row) for row in rows if row]
