@@ -41,6 +41,28 @@ def get_call_status(call_session_id: str = Query(..., min_length=8)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/fail")
+async def fail_call(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Payload gagal dibaca.") from exc
+
+    try:
+        call_session_id = str((payload or {}).get("call_session_id") or "").strip()
+        if len(call_session_id) < 8:
+            raise RuntimeError("call_session_id wajib dikirim.")
+        updated = ContactCallService.fail_from_client(
+            call_session_id,
+            status=str((payload or {}).get("status") or "failed"),
+            reason=str((payload or {}).get("reason") or "client_error"),
+            request=request,
+        )
+        return JSONResponse({"ok": True, "call": updated})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.api_route("/twiml", methods=["GET", "POST"])
 async def contact_call_twiml(request: Request, call_session_id: str | None = Query(None, min_length=8)):
     try:

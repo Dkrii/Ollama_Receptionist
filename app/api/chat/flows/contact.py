@@ -753,7 +753,6 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
                 target_kind=target_kind,
                 department=department,
             ),
-            action_result=action_result,
         )
 
     if _is_successful_contact_status(request_status):

@@ -87,6 +87,7 @@ let currentCallSession = null;
 let currentCallConnection = null;
 let currentCallConnected = false;
 let currentCallCompletionHandled = false;
+let currentCallBackendStatus = 'idle';
 let isStartingTwoWayCall = false;
 let twilioDevice = null;
 let pendingCallAction = null;
@@ -1172,6 +1173,29 @@ function buildCallStatusText(status) {
   return 'Menyiapkan sambungan';
 }
 
+async function reportCallFailure(callSessionId, status = 'failed', reason = 'client_error') {
+  const normalizedSessionId = String(callSessionId || '').trim();
+  if (!normalizedSessionId) return;
+
+  try {
+    await fetch('/api/contact/call/fail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        call_session_id: normalizedSessionId,
+        status,
+        reason,
+      }),
+    });
+  } catch (error) {
+  }
+}
+
+function hasCallAttemptStarted() {
+  const status = String(currentCallBackendStatus || '').trim().toLowerCase();
+  return Boolean(currentCallConnected || (status && status !== 'preparing' && status !== 'idle'));
+}
+
 function suspendAudioForCall() {
   clearTimeout(conversationResetTimer);
   clearTimeout(sessionIdleTimer);
@@ -1291,6 +1315,7 @@ function finishActiveCall({ mode, title, detail }) {
   currentCallSession = null;
   currentCallConnection = null;
   currentCallConnected = false;
+  currentCallBackendStatus = 'idle';
   resetCallPanel();
   updateMicState();
 }
@@ -1321,12 +1346,18 @@ function wireTwilioCallEvents(connection) {
 
   connection.on('disconnect', () => {
     if (!currentCallSession) return;
+    if (!currentCallConnected && !hasCallAttemptStarted()) {
+      return;
+    }
     const title = currentCallConnected
       ? buildCallPanelTitle(currentCallSession)
       : buildCallPanelTitle(currentCallSession);
     const detail = currentCallConnected
       ? buildCallStatusText('completed')
       : buildCallStatusText('failed');
+    if (!currentCallConnected) {
+      reportCallFailure(currentCallSession.call_session_id, 'failed', 'browser_disconnect');
+    }
     finishActiveCall({
       mode: currentCallConnected ? 'ended' : 'failed',
       title,
@@ -1336,6 +1367,10 @@ function wireTwilioCallEvents(connection) {
 
   connection.on('cancel', () => {
     if (!currentCallSession) return;
+    if (!hasCallAttemptStarted()) {
+      return;
+    }
+    reportCallFailure(currentCallSession.call_session_id, 'failed', 'call_cancelled');
     finishActiveCall({
       mode: 'failed',
       title: buildCallPanelTitle(currentCallSession),
@@ -1345,6 +1380,10 @@ function wireTwilioCallEvents(connection) {
 
   connection.on('reject', () => {
     if (!currentCallSession) return;
+    if (!hasCallAttemptStarted()) {
+      return;
+    }
+    reportCallFailure(currentCallSession.call_session_id, 'busy', 'call_rejected');
     finishActiveCall({
       mode: 'failed',
       title: buildCallPanelTitle(currentCallSession),
@@ -1354,6 +1393,11 @@ function wireTwilioCallEvents(connection) {
 
   connection.on('error', (error) => {
     if (!currentCallSession) return;
+    if (!hasCallAttemptStarted()) {
+      return;
+    }
+    const reason = String(error?.code || error?.message || 'device_error').trim().toLowerCase();
+    reportCallFailure(currentCallSession.call_session_id, 'failed', reason);
     finishActiveCall({
       mode: 'failed',
       title: buildCallPanelTitle(currentCallSession),
@@ -1375,6 +1419,7 @@ function applyPolledCallStatus(callRecord) {
   if (!currentCallSession || !callRecord) return;
 
   const status = String(callRecord.call_status || '').trim().toLowerCase();
+  currentCallBackendStatus = status || currentCallBackendStatus;
   const title = buildCallPanelTitle(currentCallSession);
 
   if (status === 'preparing' || status === 'dialing_employee' || status === 'ringing') {
@@ -1433,6 +1478,7 @@ function startCallConnectTimeout(callAction) {
   stopCallStartTimeout();
   callStartTimeout = window.setTimeout(() => {
     if (!currentCallSession || currentCallCompletionHandled || currentCallConnected) return;
+    reportCallFailure(callAction.call_session_id, 'failed', 'connect_timeout');
     finishActiveCall({
       mode: 'failed',
       title: buildCallPanelTitle(callAction),
@@ -1453,6 +1499,7 @@ async function startTwoWayCall(callAction) {
   currentCallConnection = null;
   currentCallConnected = false;
   currentCallCompletionHandled = false;
+  currentCallBackendStatus = 'preparing';
 
   suspendAudioForCall();
   activateConversationLayout();
@@ -1465,21 +1512,17 @@ async function startTwoWayCall(callAction) {
   startCallConnectTimeout(callAction);
 
   try {
-    const device = await ensureTwilioDevice(callAction);
-    const connection = await device.connect({
-      params: {
-        call_session_id: callAction.call_session_id,
-      },
-    });
-    currentCallConnection = connection;
-    isStartingTwoWayCall = false;
-    wireTwilioCallEvents(connection);
+      const device = await ensureTwilioDevice(callAction);
+      const connection = await device.connect({
+        params: {
+          call_session_id: callAction.call_session_id,
+        },
+      });
+      currentCallConnection = connection;
+      isStartingTwoWayCall = false;
+      wireTwilioCallEvents(connection);
   } catch (error) {
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(callAction),
-      detail: buildCallStatusText('failed'),
-    });
+    isStartingTwoWayCall = false;
   }
 }
 
