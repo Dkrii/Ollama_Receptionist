@@ -39,3 +39,21 @@ def post_json(
     )
     response.raise_for_status()
     return response, response_payload(response)
+
+
+def post_form(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    basic_auth_username: str = "",
+    basic_auth_password: str = "",
+    timeout_seconds: int = 15,
+) -> tuple[requests.Response, dict[str, Any]]:
+    response = _http_session.post(
+        url,
+        data=payload,
+        auth=(basic_auth_username, basic_auth_password) if basic_auth_username or basic_auth_password else None,
+        timeout=max(5, int(timeout_seconds or 15)),
+    )
+    response.raise_for_status()
+    return response, response_payload(response)

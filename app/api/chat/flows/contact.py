@@ -553,6 +553,11 @@ def _resolve_disambiguation_selection(message: str, candidates: list[dict]) -> d
 def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
     if action == "call":
         stored_call: dict[str, Any] | None = None
+        initial_call_provider = (
+            "dummy"
+            if str(getattr(settings, "app_env", "development") or "development").strip().lower() != "production"
+            else ("twilio" if "twilio.com" in str(getattr(settings, "contact_call_api_url", "") or "").lower() else "contact_call_api")
+        )
         try:
             stored_call = AdminRepository.create_contact_call(
                 employee_id=int(employee["id"]),
@@ -561,7 +566,7 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
                 employee_nomor_wa=str(employee["nomor_wa"]),
                 call_status="queued",
                 call_detail="Menunggu dispatcher call.",
-                call_provider=str(getattr(settings, "contact_call_mode", "dummy") or "dummy"),
+                call_provider=initial_call_provider,
             )
             dispatch_result = queue_contact_call(employee=employee)
             delivered_payload = AdminRepository.update_contact_call_status(
@@ -584,7 +589,7 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
                         call_id=int(stored_call["id"]),
                         call_status="failed",
                         call_detail="Dispatcher call gagal dijalankan.",
-                        call_provider=str(getattr(settings, "contact_call_mode", "dummy") or "dummy"),
+                        call_provider=initial_call_provider,
                         provider_payload={"error": "dispatch_failed"},
                         mark_connected=False,
                     )
@@ -620,6 +625,11 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
         },
         "detail": "Permintaan kontak diterima dan sistem sedang mengecek ketersediaan karyawan.",
     }
+
+
+def _initial_message_delivery_provider() -> str:
+    app_env = str(getattr(settings, "app_env", "development") or "development").strip().lower()
+    return "whatsapp_api" if app_env == "production" else "dummy"
 
 
 def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any]:
@@ -986,6 +996,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         )
 
     stored_message: dict[str, Any] | None = None
+    initial_message_provider = _initial_message_delivery_provider()
     try:
         message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
         stored_message = AdminRepository.create_contact_message(
@@ -999,7 +1010,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             channel="whatsapp",
             delivery_status="queued",
             delivery_detail="Menunggu dispatcher WhatsApp.",
-            delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+            delivery_provider=initial_message_provider,
         )
         dispatch_result = dispatch_contact_message(
             employee=selected,
@@ -1024,7 +1035,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
                     message_id=int(stored_message["id"]),
                     delivery_status="failed",
                     delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
-                    delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+                    delivery_provider=initial_message_provider,
                     provider_payload={"error": "dispatch_failed"},
                     mark_sent=False,
                 )
