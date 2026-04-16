@@ -9,6 +9,7 @@ from api.admin.repository import AdminRepository
 from api.admin.routes import router as admin_router
 from api.chat.repository import ChatRepository
 from api.chat.routes import router as chat_router
+from api.contact.routes import router as contact_call_router
 from api.web.routes import router as web_router
 from middleware import RequestLoggerMiddleware
 
@@ -40,4 +41,5 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 app.include_router(web_router)
 app.include_router(chat_router)
+app.include_router(contact_call_router)
 app.include_router(admin_router)

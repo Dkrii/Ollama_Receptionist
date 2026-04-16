@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+node_modules/
 .env
 *.log
 chroma_data/

@@ -15,16 +15,16 @@ def dispatch_contact_message(
     visitor_goal: str,
     message_text: str,
 ) -> dict[str, Any]:
-    mode = str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy").strip().lower()
+    app_env = str(getattr(settings, "app_env", "development") or "development").strip().lower()
 
-    if mode != "whatsapp_api":
+    if app_env != "production":
         return {
             "provider": "dummy",
             "status": "sent_dummy",
             "detail": "Dummy WhatsApp dispatcher berhasil (simulasi tanpa API key).",
             "provider_message_id": "",
             "provider_payload": {
-                "mode": mode,
+                "app_env": app_env,
                 "employee_id": employee.get("id"),
                 "employee_name": employee.get("nama"),
             },

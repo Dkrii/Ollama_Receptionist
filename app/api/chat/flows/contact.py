@@ -4,12 +4,12 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from api.admin.repository import AdminRepository
+from api.contact.service import ContactCallService
 from api.chat.intent import (
     detect_conversation_intent,
     extract_department_from_text,
     extract_visitor_goal,
     extract_visitor_name,
-    interpret_unavailable_choice,
     message_may_require_contact_intent,
     normalize_department,
 )
@@ -19,7 +19,6 @@ from config import settings
 from lib.contact import (
     dispatch_contact_message,
     normalize_contact_mode,
-    queue_contact_call,
 )
 from rag.employee_directory import load_employee_directory
 
@@ -54,11 +53,11 @@ _LEAVE_MESSAGE_PATTERNS = (
     r"\bpesan saja\b",
     r"\bleave message\b",
 )
-_WAIT_PATTERNS = (
-    r"\btunggu\b",
-    r"\bmenunggu\b",
-    r"\bwait\b",
-    r"\blobby\b",
+_EXPLICIT_NOTIFY_PATTERNS = _LEAVE_MESSAGE_PATTERNS + (
+    r"\bwhatsapp\b",
+    r"\bwa\b",
+    r"\bkirim(?:kan)? pesan\b",
+    r"\bchat\b",
 )
 
 
@@ -124,22 +123,6 @@ def _classify_confirmation_reply(message: str) -> str:
     return "unknown"
 
 
-def _classify_unavailable_choice_rule_based(message: str) -> str:
-    normalized = normalize_text(message)
-    if not normalized:
-        return "unknown"
-
-    if _matches_any_pattern(normalized, _LEAVE_MESSAGE_PATTERNS):
-        return "leave_message"
-    if _matches_any_pattern(normalized, _WAIT_PATTERNS):
-        return "wait_in_lobby"
-
-    confirmation = _classify_confirmation_reply(normalized)
-    if confirmation == "confirm_no":
-        return "decline"
-    return "unknown"
-
-
 def _extract_flow_context(flow_state: dict[str, Any] | None) -> dict[str, str]:
     context = flow_state.get("context") if isinstance(flow_state, dict) else {}
     if not isinstance(context, dict):
@@ -200,10 +183,23 @@ def _update_flow_context_from_intent(
     return context
 
 
-def _resolve_contact_mode(intent_result: dict[str, Any], flow_state: dict[str, Any] | None = None) -> str:
+def _is_explicit_notify_request(message: str) -> bool:
+    normalized = normalize_text(message)
+    if not normalized:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _EXPLICIT_NOTIFY_PATTERNS)
+
+
+def _resolve_contact_mode(
+    intent_result: dict[str, Any],
+    flow_state: dict[str, Any] | None = None,
+    user_message: str = "",
+) -> str:
     intent_mode = normalize_contact_mode(intent_result.get("contact_mode"))
-    if intent_mode in {"call", "notify"}:
-        return intent_mode
+    if intent_mode == "call":
+        return "call"
+    if intent_mode == "notify" and _is_explicit_notify_request(user_message):
+        return "notify"
 
     if isinstance(flow_state, dict):
         saved = str(flow_state.get("action") or "").strip().lower()
@@ -360,8 +356,6 @@ def _should_restart_contact_flow(
     if stage not in {
         "await_disambiguation",
         "await_confirmation",
-        "await_unavailable_choice",
-        "await_waiter_name",
         "await_message_name",
         "await_message_goal",
     }:
@@ -371,9 +365,6 @@ def _should_restart_contact_flow(
         return False
 
     if _classify_confirmation_reply(user_message) != "unknown":
-        return False
-
-    if _classify_unavailable_choice_rule_based(user_message) != "unknown":
         return False
 
     return not _is_same_contact_target(active_flow_state, semantic_intent)
@@ -395,16 +386,10 @@ def _build_cancel_contact_answer(selected: dict | None, target_kind: str, depart
     return "Saya sudah membatalkan proses hubungi. Apakah ada yang bisa saya bantu lagi?"
 
 
-def _build_unavailable_contact_answer(selected: dict, target_kind: str, department: str) -> str:
-    if target_kind == "department" and department:
-        return (
-            f"Saya sudah mencoba menghubungi tim {department}, tetapi belum ada respons. "
-            "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
-        )
-
+def _build_call_unavailable_message_answer(selected: dict) -> str:
     return (
-        f"Saya sudah mencoba menghubungi {selected['nama']}, tetapi belum ada respons. "
-        "Anda bisa memilih meninggalkan pesan atau menunggu di lobby. Apa yang ingin Anda lakukan?"
+        f"{selected['nama']} tidak bisa dihubungi saat ini. "
+        "Saya bisa bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
     )
 
 
@@ -441,27 +426,16 @@ def _build_disambiguation_follow_up(candidates: list[dict]) -> dict[str, Any]:
     return _build_follow_up_choices("await_disambiguation", options)
 
 
-def _build_unavailable_follow_up() -> dict[str, Any]:
-    return _build_follow_up_choices(
-        "await_unavailable_choice",
-        [
-            {"id": "leave_message", "label": "Tinggalkan pesan", "value": "tinggalkan pesan"},
-            {"id": "wait_in_lobby", "label": "Tunggu di lobby", "value": "tunggu di lobby"},
-            {"id": "decline", "label": "Batal", "value": "tidak jadi"},
-        ],
-    )
-
-
 def _build_contact_request_success_answer(selected: dict, action_result: dict[str, Any]) -> str:
     detail = str(action_result.get("detail") or "").strip()
     if detail:
         return detail
 
     action_type = str(action_result.get("type") or "").strip().lower()
-    if action_type == "call":
+    if action_type in {"call", "start_two_way_call"}:
         return (
-            f"Permintaan panggilan untuk {selected['nama']} sudah diteruskan. "
-            "Silakan menunggu sebentar di area resepsionis."
+            f"Saya sedang mencoba menyambungkan Anda dengan {selected['nama']}. "
+            "Mohon izinkan akses mikrofon bila diminta."
         )
 
     return (
@@ -471,11 +445,11 @@ def _build_contact_request_success_answer(selected: dict, action_result: dict[st
 
 
 def _is_unavailable_contact_status(status: str) -> bool:
-    return status in {"busy", "unavailable", "offline", "not_available", "no_response"}
+    return status in {"busy", "unavailable", "offline", "not_available", "no_response", "failed"}
 
 
 def _is_successful_contact_status(status: str) -> bool:
-    return status in {"queued", "ringing", "connected", "sent", "sent_dummy"}
+    return status in {"preparing", "dialing_employee", "queued", "ringing", "connected", "sent", "sent_dummy"}
 
 
 def _build_contact_response(
@@ -533,19 +507,23 @@ def _resolve_disambiguation_selection(message: str, candidates: list[dict]) -> d
 
 def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
     if action == "call":
-        dispatch_result = queue_contact_call(employee=employee)
+        stored_call = ContactCallService.create_session_for_employee(employee)
         return {
-            "type": "call",
-            "status": dispatch_result["status"],
-            "provider": dispatch_result["provider"],
+            "type": "start_two_way_call",
+            "status": str((stored_call or {}).get("call_status") or "preparing"),
+            "provider": str((stored_call or {}).get("call_provider") or "twilio_voice"),
             "employee": {
                 "id": employee["id"],
                 "nama": employee["nama"],
                 "departemen": employee["departemen"],
                 "jabatan": employee["jabatan"],
+                "nomor_wa": employee["nomor_wa"],
             },
-            "detail": dispatch_result["detail"],
-            "provider_payload": dispatch_result.get("provider_payload"),
+            "detail": str((stored_call or {}).get("call_detail") or ""),
+            "call_session_id": str((stored_call or {}).get("call_session_id") or ""),
+            "dev_identity": str((stored_call or {}).get("dev_identity") or ""),
+            "provider_payload": (stored_call or {}).get("provider_payload"),
+            "call": stored_call,
         }
 
     return {
@@ -561,6 +539,11 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
         },
         "detail": "Permintaan kontak diterima dan sistem sedang mengecek ketersediaan karyawan.",
     }
+
+
+def _initial_message_delivery_provider() -> str:
+    app_env = str(getattr(settings, "app_env", "development") or "development").strip().lower()
+    return "whatsapp_api" if app_env == "production" else "dummy"
 
 
 def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any]:
@@ -645,60 +628,7 @@ def _handle_stage_disambiguation(ctx: dict) -> dict:
 
 
 # ============================================================================
-# LANGKAH 4: STAGE UNAVAILABLE CHOICE
-# ============================================================================
-
-
-def _handle_stage_unavailable_choice(ctx: dict) -> dict:
-    user_message, conversation_id, safe_flow_state, flow_context, action = _unpack_ctx(ctx)
-    selected, target_kind, department = _extract_session(safe_flow_state)
-
-    if not isinstance(selected, dict) or not selected.get("id"):
-        return _expired_response(conversation_id, flow_context, "Sesi tidak tersedia berakhir. Silakan ulangi permintaan hubungi karyawan.")
-
-    choice_decision = _classify_unavailable_choice_rule_based(user_message)
-    if choice_decision == "unknown":
-        choice_result = interpret_unavailable_choice(user_message, safe_flow_state)
-        choice_decision = str(choice_result.get("decision") or "unknown").strip().lower()
-
-    if choice_decision == "leave_message":
-        answer = "Baik, saya bantu tinggalkan pesan. Mohon sebutkan nama Anda terlebih dahulu."
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=conversation_id,
-            flow_state=_build_stage("await_message_name", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
-        )
-
-    if choice_decision == "decline":
-        answer = "Baik, Anda tidak meninggalkan pesan. Silakan menuju front office untuk bantuan lebih lanjut secara offline."
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
-
-    if choice_decision == "wait_in_lobby":
-        answer = (
-            f"Baik, silakan sebutkan nama Anda. "
-            f"Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
-        )
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=conversation_id,
-            flow_state=_build_stage("await_waiter_name", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
-        )
-
-    answer = _build_unavailable_contact_answer(selected, target_kind, department)
-    store_chat_message(conversation_id, "assistant", answer)
-    return _build_contact_response(
-        answer=answer,
-        conversation_id=conversation_id,
-        flow_state=_build_stage("await_unavailable_choice", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
-        follow_up=_build_unavailable_follow_up(),
-    )
-
-
-# ============================================================================
-# LANGKAH 5: STAGE CONFIRMATION
+# LANGKAH 4: STAGE CONFIRMATION
 # ============================================================================
 
 
@@ -776,6 +706,17 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
 
+    if action == "call" and isinstance(action_result, dict):
+        action_result["fallback_flow_state"] = _build_stage(
+            "await_message_name",
+            flow_context,
+            action=action,
+            selected=selected,
+            target_kind=target_kind,
+            department=department,
+        )
+        action_result["fallback_answer"] = _build_call_unavailable_message_answer(selected)
+
     request_status = str(action_result.get("status") or "").strip().lower()
 
     if action == "notify":
@@ -799,21 +740,19 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
         )
 
     if _is_unavailable_contact_status(request_status):
-        answer = _build_unavailable_contact_answer(selected, target_kind, department)
+        answer = _build_call_unavailable_message_answer(selected)
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage(
-                "await_unavailable_choice",
+                "await_message_name",
                 flow_context,
                 action=action,
                 selected=selected,
                 target_kind=target_kind,
                 department=department,
             ),
-            action_result=action_result,
-            follow_up=_build_unavailable_follow_up(),
         )
 
     if _is_successful_contact_status(request_status):
@@ -837,34 +776,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
 
 
 # ============================================================================
-# LANGKAH 6: STAGE WAITER NAME
-# ============================================================================
-
-
-def _handle_stage_waiter_name(ctx: dict) -> dict:
-    user_message, conversation_id, safe_flow_state, flow_context, action = _unpack_ctx(ctx)
-    selected, target_kind, department = _extract_session(safe_flow_state)
-
-    if not isinstance(selected, dict) or not selected.get("id"):
-        return _expired_response(conversation_id, flow_context, "Sesi menunggu berakhir. Silakan ulangi permintaan hubungi karyawan.")
-
-    visitor_name = extract_visitor_name(user_message, safe_flow_state)
-    if not visitor_name:
-        answer = "Silakan sebutkan nama Anda terlebih dahulu."
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=conversation_id,
-            flow_state=_build_stage("await_waiter_name", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
-        )
-
-    answer = f"Baik, {visitor_name}. Saya akan menyampaikan kepada {selected['nama']} bahwa Anda menunggu di lobby."
-    store_chat_message(conversation_id, "assistant", answer)
-    return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
-
-
-# ============================================================================
-# LANGKAH 7: STAGE MESSAGE NAME
+# LANGKAH 5: STAGE MESSAGE NAME
 # ============================================================================
 
 
@@ -895,7 +807,7 @@ def _handle_stage_message_name(ctx: dict) -> dict:
 
 
 # ============================================================================
-# LANGKAH 8: STAGE MESSAGE GOAL
+# LANGKAH 6: STAGE MESSAGE GOAL
 # ============================================================================
 
 
@@ -927,6 +839,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         )
 
     stored_message: dict[str, Any] | None = None
+    initial_message_provider = _initial_message_delivery_provider()
     try:
         message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
         stored_message = AdminRepository.create_contact_message(
@@ -940,7 +853,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             channel="whatsapp",
             delivery_status="queued",
             delivery_detail="Menunggu dispatcher WhatsApp.",
-            delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+            delivery_provider=initial_message_provider,
         )
         dispatch_result = dispatch_contact_message(
             employee=selected,
@@ -965,7 +878,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
                     message_id=int(stored_message["id"]),
                     delivery_status="failed",
                     delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
-                    delivery_provider=str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy"),
+                    delivery_provider=initial_message_provider,
                     provider_payload={"error": "dispatch_failed"},
                     mark_sent=False,
                 )
@@ -1007,7 +920,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
 
 
 # ============================================================================
-# LANGKAH 9: STAGE ENTRY
+# LANGKAH 7: STAGE ENTRY
 # ============================================================================
 
 
@@ -1084,15 +997,13 @@ def _handle_stage_entry(ctx: dict) -> dict:
 _STAGE_HANDLERS: dict[str, Any] = {
     "await_disambiguation": _handle_stage_disambiguation,
     "await_confirmation": _handle_stage_confirmation,
-    "await_unavailable_choice": _handle_stage_unavailable_choice,
-    "await_waiter_name": _handle_stage_waiter_name,
     "await_message_name": _handle_stage_message_name,
     "await_message_goal": _handle_stage_message_goal,
 }
 
 
 # ============================================================================
-# LANGKAH 11: HELPER ORCHESTRATION
+# LANGKAH 8: HELPER ORCHESTRATION
 # ============================================================================
 
 
@@ -1158,7 +1069,7 @@ def _is_contact_intent_usable(user_message: str, semantic_intent: dict[str, Any]
 
 
 # ============================================================================
-# LANGKAH 12: ENTRY POINT CONTACT FLOW
+# LANGKAH 9: ENTRY POINT CONTACT FLOW
 # ============================================================================
 
 
@@ -1188,7 +1099,7 @@ def handle_contact_flow(
         if should_probe_intent_llm
         else _default_semantic_intent()
     )
-    action = _resolve_contact_mode(semantic_intent, safe_flow_state)
+    action = _resolve_contact_mode(semantic_intent, safe_flow_state, user_message)
     flow_context = _update_flow_context_from_intent(base_context, semantic_intent)
 
     if not user_message:
