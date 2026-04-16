@@ -301,6 +301,10 @@ input {
   -webkit-backdrop-filter: blur(18px);
 }
 
+.dev-call-panel[hidden] {
+  display: none;
+}
+
 .dev-call-panel.is-active {
   border-color: rgba(133, 214, 255, 0.34);
   box-shadow:

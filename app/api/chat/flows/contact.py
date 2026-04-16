@@ -511,7 +511,7 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
         return {
             "type": "start_two_way_call",
             "status": str((stored_call or {}).get("call_status") or "preparing"),
-            "provider": str((stored_call or {}).get("call_provider") or "dummy"),
+            "provider": str((stored_call or {}).get("call_provider") or "twilio_voice"),
             "employee": {
                 "id": employee["id"],
                 "nama": employee["nama"],

@@ -4,16 +4,15 @@ from typing import Any
 from fastapi import Request
 
 from api.admin.repository import AdminRepository
+from config import settings
 from lib.contact.call_session import (
     ACTIVE_CALL_STATUSES,
-    CALL_PROVIDER_DUMMY,
     build_dev_identity,
     build_status_detail,
     build_twiml,
     call_provider,
     create_access_token,
     create_call_session_id,
-    is_call_simulation,
     mask_value,
     normalize_twilio_call_status,
     require_employee_phone,
@@ -49,8 +48,7 @@ class ContactCallService:
     def create_session_for_employee(employee: dict[str, Any]) -> dict[str, Any]:
         require_employee_phone(employee)
         provider = call_provider()
-        if provider != CALL_PROVIDER_DUMMY:
-            require_twilio_settings()
+        require_twilio_settings()
 
         call_session_id = create_call_session_id()
         dev_identity = build_dev_identity(call_session_id)
@@ -67,7 +65,7 @@ class ContactCallService:
             call_detail=detail,
             call_provider=provider,
             provider_payload={
-                "app_env": "development" if is_call_simulation() else "production",
+                "app_env": str(getattr(settings, "app_env", "") or "").strip().lower(),
                 "channel": "two_way_call",
             },
             call_session_id=call_session_id,
@@ -80,35 +78,26 @@ class ContactCallService:
         if not stored_call:
             raise RuntimeError("Sesi telepon tidak ditemukan.")
 
-        if is_call_simulation():
-            _logger.info(
-                "contact.call.token id=%s session=%s provider=%s simulated=true",
-                ContactCallService._request_id(request),
-                mask_value(str(stored_call.get("call_session_id") or ""), head=6, tail=4),
-                CALL_PROVIDER_DUMMY,
-            )
-            return {
-                "provider": CALL_PROVIDER_DUMMY,
-                "simulated": True,
-                "token": "",
-                "identity": str(stored_call.get("dev_identity") or ""),
-                "call_session_id": call_session_id,
-            }
-
         token = create_access_token(identity=str(stored_call.get("dev_identity") or ""))
         _logger.info(
-            "contact.call.token id=%s session=%s provider=%s simulated=false",
+            "contact.call.token id=%s session=%s provider=%s",
             ContactCallService._request_id(request),
             mask_value(str(stored_call.get("call_session_id") or ""), head=6, tail=4),
             str(stored_call.get("call_provider") or call_provider()),
         )
         return {
             "provider": str(stored_call.get("call_provider") or call_provider()),
-            "simulated": False,
             "token": token,
             "identity": str(stored_call.get("dev_identity") or ""),
             "call_session_id": call_session_id,
         }
+
+    @staticmethod
+    def get_status(call_session_id: str) -> dict[str, Any]:
+        stored_call = AdminRepository.get_contact_call_by_session_id(call_session_id)
+        if not stored_call:
+            raise RuntimeError("Sesi telepon tidak ditemukan.")
+        return stored_call
 
     @staticmethod
     async def render_twiml(call_session_id: str | None, request: Request) -> str:

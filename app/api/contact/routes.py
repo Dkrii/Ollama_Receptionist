@@ -33,6 +33,14 @@ def issue_call_token(request: Request, call_session_id: str = Query(..., min_len
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/status")
+def get_call_status(call_session_id: str = Query(..., min_length=8)):
+    try:
+        return JSONResponse({"ok": True, "call": ContactCallService.get_status(call_session_id)})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.api_route("/twiml", methods=["GET", "POST"])
 async def contact_call_twiml(request: Request, call_session_id: str | None = Query(None, min_length=8)):
     try:

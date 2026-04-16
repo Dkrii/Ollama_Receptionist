@@ -90,7 +90,8 @@ let currentCallCompletionHandled = false;
 let isStartingTwoWayCall = false;
 let twilioDevice = null;
 let pendingCallAction = null;
-let callSimulationTimers = [];
+let callStatusPollTimer = null;
+let callStartTimeout = null;
 const DEBUG_REFRESH_MS = 180;
 const STT_FATAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);
 const STT_FATAL_RETRY_BLOCK_MS = 8000;
@@ -1112,14 +1113,27 @@ function isCallActive() {
   return Boolean(currentCallSession || isStartingTwoWayCall);
 }
 
-function clearCallSimulationTimers() {
-  callSimulationTimers.forEach((timerId) => window.clearTimeout(timerId));
-  callSimulationTimers = [];
+function stopCallStatusPolling() {
+  if (!callStatusPollTimer) return;
+  window.clearInterval(callStatusPollTimer);
+  callStatusPollTimer = null;
+}
+
+function stopCallStartTimeout() {
+  if (!callStartTimeout) return;
+  window.clearTimeout(callStartTimeout);
+  callStartTimeout = null;
+}
+
+function setCallPanelVisible(visible) {
+  if (!callPanel) return;
+  callPanel.hidden = !visible;
 }
 
 function setCallPanelState(mode, title, status) {
   if (!callPanel || !callPanelTitle || !callPanelStatus) return;
 
+  setCallPanelVisible(true);
   callPanel.classList.remove('is-active', 'is-connected', 'is-failed');
   if (mode === 'active') {
     callPanel.classList.add('is-active');
@@ -1134,11 +1148,28 @@ function setCallPanelState(mode, title, status) {
 }
 
 function resetCallPanel() {
-  setCallPanelState(
-    'idle',
-    'Belum ada sambungan aktif',
-    'Saat pengunjung setuju untuk dihubungkan, status sambungan akan muncul di sini sebagai informasi pasif.'
-  );
+  if (!callPanel || !callPanelTitle || !callPanelStatus) return;
+  callPanel.classList.remove('is-active', 'is-connected', 'is-failed');
+  callPanelTitle.textContent = 'Belum ada sambungan aktif';
+  callPanelStatus.textContent = 'Saat pengunjung setuju untuk dihubungkan, status sambungan akan muncul di sini sebagai informasi pasif.';
+  setCallPanelVisible(false);
+}
+
+function buildCallPanelTitle(callAction) {
+  return String(callAction?.employee?.nama || 'Sambungan telepon');
+}
+
+function buildCallStatusText(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'preparing') return 'Menyiapkan sambungan';
+  if (normalized === 'dialing_employee') return 'Menghubungi';
+  if (normalized === 'ringing') return 'Berdering';
+  if (normalized === 'connected') return 'Terhubung';
+  if (normalized === 'busy') return 'Sedang sibuk';
+  if (normalized === 'no_response') return 'Tidak merespons';
+  if (normalized === 'failed') return 'Tidak terhubung';
+  if (normalized === 'completed') return 'Panggilan selesai';
+  return 'Menyiapkan sambungan';
 }
 
 function suspendAudioForCall() {
@@ -1162,7 +1193,6 @@ async function fetchCallToken(callSessionId) {
   }
   const payload = await response.json();
   console.info('contact.call.token', {
-    simulated: Boolean(payload?.simulated),
     provider: payload?.provider || '-',
     hasToken: Boolean(payload?.token),
     tokenLength: String(payload?.token || '').length
@@ -1188,10 +1218,6 @@ async function ensureTwilioDevice(callAction) {
   }
 
   const tokenPayload = await fetchCallToken(callAction.call_session_id);
-  if (tokenPayload?.simulated) {
-    return null;
-  }
-
   if (twilioDevice && typeof twilioDevice.destroy === 'function') {
     try {
       twilioDevice.destroy();
@@ -1207,14 +1233,10 @@ async function ensureTwilioDevice(callAction) {
   if (typeof twilioDevice.on === 'function') {
     twilioDevice.on('error', (error) => {
       if (!currentCallSession) return;
-      const rawMessage = String(error?.message || 'Terjadi kendala saat menghubungkan panggilan.');
-      const detail = rawMessage.includes('AccessTokenInvalid')
-        ? 'Token Twilio tidak valid. Cek pasangan Account SID, API Key SID, API Key Secret, dan TwiML App SID.'
-        : rawMessage;
       finishActiveCall({
         mode: 'failed',
-        title: `Panggilan ke ${currentCallSession.employee.nama} belum tersambung`,
-        detail,
+        title: buildCallPanelTitle(currentCallSession),
+        detail: buildCallStatusText('failed'),
       });
     });
     twilioDevice.on('tokenWillExpire', refreshTwilioToken);
@@ -1245,7 +1267,8 @@ function finishActiveCall({ mode, title, detail }) {
 
   currentCallCompletionHandled = true;
   isStartingTwoWayCall = false;
-  clearCallSimulationTimers();
+  stopCallStatusPolling();
+  stopCallStartTimeout();
   const fallbackAnswer = String(currentCallSession?.fallbackAnswer || '').trim();
 
   if (mode === 'connected') {
@@ -1268,6 +1291,7 @@ function finishActiveCall({ mode, title, detail }) {
   currentCallSession = null;
   currentCallConnection = null;
   currentCallConnected = false;
+  resetCallPanel();
   updateMicState();
 }
 
@@ -1278,18 +1302,19 @@ function wireTwilioCallEvents(connection) {
     if (!currentCallSession) return;
     setCallPanelState(
       'active',
-      `Menghubungi ${currentCallSession.employee.nama}`,
-      `${currentCallSession.employee.nama} sedang dipanggil.`
+      buildCallPanelTitle(currentCallSession),
+      buildCallStatusText('ringing')
     );
   });
 
   connection.on('accept', () => {
     if (!currentCallSession) return;
     currentCallConnected = true;
+    stopCallStartTimeout();
     setCallPanelState(
       'connected',
-      `Terhubung dengan ${currentCallSession.employee.nama}`,
-      `Audio dua arah dengan ${currentCallSession.employee.nama} sudah aktif.`
+      buildCallPanelTitle(currentCallSession),
+      buildCallStatusText('connected')
     );
     updateMicState();
   });
@@ -1297,11 +1322,11 @@ function wireTwilioCallEvents(connection) {
   connection.on('disconnect', () => {
     if (!currentCallSession) return;
     const title = currentCallConnected
-      ? `Panggilan dengan ${currentCallSession.employee.nama} selesai`
-      : `Panggilan ke ${currentCallSession.employee.nama} belum tersambung`;
+      ? buildCallPanelTitle(currentCallSession)
+      : buildCallPanelTitle(currentCallSession);
     const detail = currentCallConnected
-      ? 'Panggilan sudah diakhiri.'
-      : `${currentCallSession.employee.nama} belum dapat dihubungi saat ini.`;
+      ? buildCallStatusText('completed')
+      : buildCallStatusText('failed');
     finishActiveCall({
       mode: currentCallConnected ? 'ended' : 'failed',
       title,
@@ -1313,8 +1338,8 @@ function wireTwilioCallEvents(connection) {
     if (!currentCallSession) return;
     finishActiveCall({
       mode: 'failed',
-      title: `Panggilan ke ${currentCallSession.employee.nama} dibatalkan`,
-      detail: `${currentCallSession.employee.nama} belum dapat dihubungi saat ini.`,
+      title: buildCallPanelTitle(currentCallSession),
+      detail: buildCallStatusText('failed'),
     });
   });
 
@@ -1322,8 +1347,8 @@ function wireTwilioCallEvents(connection) {
     if (!currentCallSession) return;
     finishActiveCall({
       mode: 'failed',
-      title: `Panggilan ke ${currentCallSession.employee.nama} ditolak`,
-      detail: `${currentCallSession.employee.nama} belum dapat menerima panggilan sekarang.`,
+      title: buildCallPanelTitle(currentCallSession),
+      detail: buildCallStatusText('busy'),
     });
   });
 
@@ -1331,35 +1356,89 @@ function wireTwilioCallEvents(connection) {
     if (!currentCallSession) return;
     finishActiveCall({
       mode: 'failed',
-      title: `Panggilan ke ${currentCallSession.employee.nama} gagal`,
-      detail: error?.message || 'Terjadi kendala saat menjalankan panggilan.',
+      title: buildCallPanelTitle(currentCallSession),
+      detail: buildCallStatusText('failed'),
     });
   });
 }
 
-function startSimulatedCall(callAction) {
-  const employeeName = callAction.employee?.nama || 'karyawan';
-  clearCallSimulationTimers();
+async function fetchCallStatus(callSessionId) {
+  const response = await fetch(`/api/contact/call/status?call_session_id=${encodeURIComponent(callSessionId)}`);
+  if (!response.ok) {
+    throw new Error('Gagal menyinkronkan status panggilan.');
+  }
+  const payload = await response.json();
+  return payload?.call || null;
+}
 
-  callSimulationTimers.push(window.setTimeout(() => {
-    if (!currentCallSession) return;
-    setCallPanelState(
-      'active',
-      `Menghubungi ${employeeName}`,
-      `${employeeName} sedang dipanggil.`
-    );
-  }, 1000));
+function applyPolledCallStatus(callRecord) {
+  if (!currentCallSession || !callRecord) return;
 
-  callSimulationTimers.push(window.setTimeout(() => {
-    if (!currentCallSession) return;
+  const status = String(callRecord.call_status || '').trim().toLowerCase();
+  const title = buildCallPanelTitle(currentCallSession);
+
+  if (status === 'preparing' || status === 'dialing_employee' || status === 'ringing') {
+    if (status !== 'preparing') {
+      stopCallStartTimeout();
+    }
+    setCallPanelState('active', title, buildCallStatusText(status));
+    return;
+  }
+
+  if (status === 'connected') {
     currentCallConnected = true;
-    setCallPanelState(
-      'connected',
-      `Terhubung dengan ${employeeName}`,
-      `Simulasi sambungan dua arah ke ${employeeName} sudah aktif.`
-    );
+    stopCallStartTimeout();
+    setCallPanelState('connected', title, buildCallStatusText(status));
     updateMicState();
-  }, 2500));
+    return;
+  }
+
+  if (status === 'busy' || status === 'no_response' || status === 'failed') {
+    finishActiveCall({
+      mode: 'failed',
+      title,
+      detail: buildCallStatusText(status),
+    });
+    return;
+  }
+
+  if (status === 'completed') {
+    finishActiveCall({
+      mode: 'ended',
+      title,
+      detail: buildCallStatusText(status),
+    });
+  }
+}
+
+function startCallStatusPolling(callSessionId) {
+  stopCallStatusPolling();
+  if (!callSessionId) return;
+
+  callStatusPollTimer = window.setInterval(async () => {
+    if (!currentCallSession || currentCallCompletionHandled) {
+      stopCallStatusPolling();
+      return;
+    }
+
+    try {
+      const callRecord = await fetchCallStatus(callSessionId);
+      applyPolledCallStatus(callRecord);
+    } catch (error) {
+    }
+  }, 1500);
+}
+
+function startCallConnectTimeout(callAction) {
+  stopCallStartTimeout();
+  callStartTimeout = window.setTimeout(() => {
+    if (!currentCallSession || currentCallCompletionHandled || currentCallConnected) return;
+    finishActiveCall({
+      mode: 'failed',
+      title: buildCallPanelTitle(callAction),
+      detail: buildCallStatusText('failed'),
+    });
+  }, 15000);
 }
 
 async function startTwoWayCall(callAction) {
@@ -1379,15 +1458,11 @@ async function startTwoWayCall(callAction) {
   activateConversationLayout();
   setCallPanelState(
     'active',
-    `Menyiapkan sambungan ke ${callAction.employee.nama}`,
-    callAction.detail || `Saya sedang menyiapkan sambungan telepon ke ${callAction.employee.nama}.`
+    buildCallPanelTitle(callAction),
+    buildCallStatusText('preparing')
   );
-
-  if (callAction.provider === 'dummy') {
-    isStartingTwoWayCall = false;
-    startSimulatedCall(callAction);
-    return;
-  }
+  startCallStatusPolling(callAction.call_session_id);
+  startCallConnectTimeout(callAction);
 
   try {
     const device = await ensureTwilioDevice(callAction);
@@ -1402,8 +1477,8 @@ async function startTwoWayCall(callAction) {
   } catch (error) {
     finishActiveCall({
       mode: 'failed',
-      title: `Panggilan ke ${callAction.employee.nama} gagal dimulai`,
-      detail: error?.message || 'Sesi telepon belum berhasil dimulai.',
+      title: buildCallPanelTitle(callAction),
+      detail: buildCallStatusText('failed'),
     });
   }
 }

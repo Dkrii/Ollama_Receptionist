@@ -4,17 +4,11 @@ from typing import Any
 from config import settings
 
 
-CALL_PROVIDER_DUMMY = "dummy"
 CALL_PROVIDER_TWILIO = "twilio_voice"
 ACTIVE_CALL_STATUSES = {"preparing", "dialing_employee", "ringing", "connected"}
 
-
-def is_call_simulation() -> bool:
-    return str(getattr(settings, "app_env", "development") or "development").strip().lower() != "production"
-
-
 def call_provider() -> str:
-    return CALL_PROVIDER_DUMMY if is_call_simulation() else CALL_PROVIDER_TWILIO
+    return CALL_PROVIDER_TWILIO
 
 
 def create_call_session_id() -> str:
@@ -126,20 +120,20 @@ def normalize_twilio_call_status(value: str | None) -> str:
 def build_status_detail(*, employee_name: str, status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized == "preparing":
-        return f"Saya sedang menyiapkan sambungan telepon ke {employee_name}."
+        return "Menyiapkan sambungan."
     if normalized == "dialing_employee":
-        return f"Saya sedang menghubungi {employee_name}."
+        return "Menghubungi."
     if normalized == "ringing":
-        return f"{employee_name} sedang dipanggil."
+        return "Berdering."
     if normalized == "connected":
-        return f"Sambungan dengan {employee_name} sudah aktif."
+        return "Terhubung."
     if normalized == "busy":
-        return f"{employee_name} sedang sibuk."
+        return "Sedang sibuk."
     if normalized == "no_response":
-        return f"{employee_name} belum menjawab panggilan."
+        return "Tidak merespons."
     if normalized == "completed":
-        return f"Panggilan dengan {employee_name} sudah selesai."
-    return f"Panggilan ke {employee_name} belum berhasil diproses."
+        return "Panggilan selesai."
+    return "Tidak terhubung."
 
 
 def build_twiml(*, call_session_id: str, employee_phone: str) -> str:
