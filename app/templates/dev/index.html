@@ -7,6 +7,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/dev/dev.css?v=20260408-8" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
   <link rel="stylesheet" href="/static/dev/dev.css?v=20260416-4" />
 </head>
 <body>
@@ -30,7 +39,7 @@
     <section class="kiosk-stage" aria-hidden="true">
       <div class="kiosk-stage__halo"></div>
       <div class="kiosk-stage__floor"></div>
-      <img id="kioskAvatar" src="/static/kiosk/models/IDLE.png" alt="Virtual Receptionist" class="kiosk-avatar" />
+      <div id="kioskAvatar" class="kiosk-avatar kiosk-avatar--3d" role="img" aria-label="Virtual Receptionist"></div>
       <video id="faceCamera" class="kiosk-camera" autoplay muted playsinline></video>
     </section>
 
@@ -48,6 +57,7 @@
     <ul id="debugStats" hidden></ul>
   </main>
 
+  <script type="module" src="/static/dev/dev.js?v=20260416-2"></script>
   <script src="/static/vendor/twilio/voice-sdk/twilio.min.js?v=2.18.1"></script>
   <script src="/static/dev/dev.js?v=20260416-5"></script>
 </body>
