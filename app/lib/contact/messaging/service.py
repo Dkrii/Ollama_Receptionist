@@ -1,6 +1,9 @@
-from lib.contact.messaging.providers import wablas
 from lib.contact.messaging.types import ContactMessageDispatchResult
-from lib.contact.shared.registry import get_contact_messaging_provider, is_supported_messaging_provider
+from lib.contact.shared.registry import (
+    get_contact_messaging_provider,
+    get_contact_messaging_provider_adapter,
+    is_supported_messaging_provider,
+)
 
 
 def get_active_messaging_provider() -> str:
@@ -9,9 +12,8 @@ def get_active_messaging_provider() -> str:
 
 def is_contact_messaging_configured() -> bool:
     provider = get_contact_messaging_provider()
-    if provider == wablas.MESSAGING_PROVIDER_WABLAS:
-        return wablas.is_configured()
-    return False
+    adapter = get_contact_messaging_provider_adapter(provider)
+    return bool(adapter and adapter.is_configured())
 
 
 def dispatch_contact_message(
@@ -23,8 +25,9 @@ def dispatch_contact_message(
     message_id: int | None = None,
 ) -> ContactMessageDispatchResult:
     provider = get_contact_messaging_provider()
-    if provider == wablas.MESSAGING_PROVIDER_WABLAS:
-        return wablas.dispatch_message(
+    adapter = get_contact_messaging_provider_adapter(provider)
+    if adapter is not None:
+        return adapter.dispatch_message(
             employee=employee,
             visitor_name=visitor_name,
             visitor_goal=visitor_goal,

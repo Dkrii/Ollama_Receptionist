@@ -1,38 +1,18 @@
-import uuid
 from typing import Any
 
 from config import settings
 from lib.contact.call.types import ContactCallResult, ContactCallStatusUpdate
+from lib.contact.call.utils import (
+    ACTIVE_CALL_STATUSES,
+    build_call_status_detail,
+    build_dev_identity,
+    create_call_session_id,
+    public_url,
+)
 from lib.contact.shared.phone import require_contact_phone
 
 
 CALL_PROVIDER_TWILIO = "twilio"
-ACTIVE_CALL_STATUSES = {"preparing", "dialing_employee", "ringing", "connected"}
-
-
-def create_call_session_id() -> str:
-    return uuid.uuid4().hex
-
-
-def build_dev_identity(call_session_id: str) -> str:
-    return f"dev-call-{str(call_session_id or '').strip()}"
-
-
-def mask_value(value: str | None, *, head: int = 4, tail: int = 4) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "-"
-    if len(text) <= (head + tail):
-        return text
-    return f"{text[:head]}...{text[-tail:]}"
-
-
-def public_url(path: str) -> str:
-    base_url = str(getattr(settings, "app_url", "") or "").strip().rstrip("/")
-    clean_path = "/" + str(path or "").lstrip("/")
-    if not base_url:
-        raise RuntimeError("APP_URL wajib diisi untuk telepon production.")
-    return f"{base_url}{clean_path}"
 
 
 def require_twilio_settings() -> None:
@@ -110,22 +90,15 @@ def normalize_twilio_call_status(value: str | None) -> str:
 
 
 def build_status_detail(*, employee_name: str, status: str) -> str:
-    normalized = str(status or "").strip().lower()
-    if normalized == "preparing":
-        return "Menyiapkan sambungan."
-    if normalized == "dialing_employee":
-        return "Menghubungi."
-    if normalized == "ringing":
-        return "Berdering."
-    if normalized == "connected":
-        return "Terhubung."
-    if normalized == "busy":
-        return "Sedang sibuk."
-    if normalized == "no_response":
-        return "Tidak merespons."
-    if normalized == "completed":
-        return "Panggilan selesai."
-    return "Tidak terhubung."
+    return build_call_status_detail(status)
+
+
+def issue_access_token(*, identity: str, call_session_id: str) -> dict[str, Any]:
+    return {
+        "token": create_access_token(identity=identity),
+        "identity": identity,
+        "call_session_id": call_session_id,
+    }
 
 
 def create_call_session(employee: dict[str, Any]) -> ContactCallResult:
@@ -182,10 +155,30 @@ def build_twiml(*, call_session_id: str, employee_phone: str) -> str:
     return str(response)
 
 
+def render_twiml(*, call_session_id: str, employee_phone: str) -> str:
+    return build_twiml(call_session_id=call_session_id, employee_phone=employee_phone)
+
+
 def parse_status_payload(*, payload: dict[str, Any], employee_name: str) -> ContactCallStatusUpdate:
     raw_status = str(payload.get("DialCallStatus") or payload.get("CallStatus") or "").strip()
     status = normalize_twilio_call_status(raw_status)
     provider_call_id = str(payload.get("DialCallSid") or payload.get("CallSid") or "").strip()
+    failure_reason = raw_status if status in {"busy", "no_response", "failed"} else ""
+    return {
+        "status": status,
+        "detail": build_status_detail(employee_name=employee_name, status=status),
+        "provider_call_id": provider_call_id,
+        "provider_payload": payload,
+        "failure_reason": failure_reason,
+        "mark_connected": status == "connected",
+        "mark_ended": status not in ACTIVE_CALL_STATUSES,
+    }
+
+
+def parse_client_status_payload(*, payload: dict[str, Any], employee_name: str) -> ContactCallStatusUpdate:
+    raw_status = str(payload.get("status") or "").strip()
+    status = normalize_twilio_call_status(raw_status)
+    provider_call_id = str(payload.get("provider_call_id") or payload.get("CallSid") or "").strip()
     failure_reason = raw_status if status in {"busy", "no_response", "failed"} else ""
     return {
         "status": status,

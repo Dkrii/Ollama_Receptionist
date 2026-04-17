@@ -30,3 +30,10 @@ def normalize_indonesia_phone(value: str | None) -> str:
     if not phone.isdigit() or len(phone) < 10:
         return ""
     return phone
+
+
+def normalize_indonesia_e164_phone(value: str | None) -> str:
+    phone = normalize_indonesia_phone(value)
+    if not phone:
+        return ""
+    return f"+{phone}"
