@@ -11,6 +11,7 @@ from api.chat.intent import (
     extract_visitor_goal,
     extract_visitor_name,
     message_may_require_contact_intent,
+    normalize_contact_mode,
     normalize_department,
 )
 from api.chat.repository import ChatRepository
@@ -18,7 +19,8 @@ from api.chat.utils import normalize_text, store_chat_message
 from config import settings
 from lib.contact import (
     dispatch_contact_message,
-    normalize_contact_mode,
+    get_active_messaging_provider,
+    is_contact_messaging_configured,
 )
 from rag.employee_directory import load_employee_directory
 
@@ -556,7 +558,7 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
         return {
             "type": "start_two_way_call",
             "status": str((stored_call or {}).get("call_status") or "preparing"),
-            "provider": str((stored_call or {}).get("call_provider") or "twilio_voice"),
+            "provider": str((stored_call or {}).get("call_provider") or "twilio"),
             "employee": {
                 "id": employee["id"],
                 "nama": employee["nama"],
@@ -587,8 +589,7 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
 
 
 def _initial_message_delivery_provider() -> str:
-    app_env = str(getattr(settings, "app_env", "development") or "development").strip().lower()
-    return "whatsapp_api" if app_env == "production" else "dummy"
+    return get_active_messaging_provider() if is_contact_messaging_configured() else "dummy"
 
 
 def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any]:
@@ -915,6 +916,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             visitor_name=visitor_name,
             visitor_goal=visitor_goal,
             message_text=message_content,
+            message_id=int(stored_message["id"]),
         )
         delivered_payload = AdminRepository.update_contact_message_delivery(
             message_id=int(stored_message["id"]),

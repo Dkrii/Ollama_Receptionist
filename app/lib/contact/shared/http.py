@@ -1,14 +1,16 @@
 import requests
 from typing import Any
 
-from config import settings
-
 
 _http_session = requests.Session()
 
 
-def request_timeout(setting_name: str, fallback: int = 15) -> int:
-    return max(5, int(getattr(settings, setting_name, fallback) or fallback))
+def request_timeout(raw_value: int | str | None, fallback: int = 15) -> int:
+    try:
+        timeout = int(raw_value or fallback)
+    except Exception:
+        timeout = fallback
+    return max(5, timeout)
 
 
 def response_payload(response: requests.Response) -> dict[str, Any]:
@@ -24,17 +26,17 @@ def post_json(
     *,
     url: str,
     payload: dict[str, Any],
-    bearer_token: str = "",
+    headers: dict[str, str] | None = None,
     timeout_seconds: int = 15,
 ) -> tuple[requests.Response, dict[str, Any]]:
-    headers = {"Content-Type": "application/json"}
-    if bearer_token:
-        headers["Authorization"] = f"Bearer {bearer_token}"
+    merged_headers = {"Content-Type": "application/json"}
+    if headers:
+        merged_headers.update(headers)
 
     response = _http_session.post(
         url,
         json=payload,
-        headers=headers,
+        headers=merged_headers,
         timeout=max(5, int(timeout_seconds or 15)),
     )
     response.raise_for_status()

@@ -9,11 +9,13 @@ Public API is re-exported here so callers can keep importing from `api.chat.inte
 from .department import KNOWN_DEPARTMENTS, extract_department_from_text, normalize_department
 from .detect import detect_conversation_intent, message_may_require_contact_intent
 from .extract import extract_visitor_goal, extract_visitor_name
+from .mode import normalize_contact_mode
 
 __all__ = [
     "KNOWN_DEPARTMENTS",
     "normalize_department",
     "extract_department_from_text",
+    "normalize_contact_mode",
     "message_may_require_contact_intent",
     "detect_conversation_intent",
     "extract_visitor_name",
