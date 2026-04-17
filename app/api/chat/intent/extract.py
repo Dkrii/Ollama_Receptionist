@@ -14,25 +14,6 @@ VISITOR_GOAL_FALLBACK = {
     "confidence": 0.0,
 }
 
-UNAVAILABLE_CHOICE_FALLBACK = {
-    "decision": "unknown",
-    "confidence": 0.0,
-}
-
-
-def _normalize_unavailable_choice_payload(payload: dict | None) -> dict:
-    if not isinstance(payload, dict):
-        return dict(UNAVAILABLE_CHOICE_FALLBACK)
-
-    decision = str(payload.get("decision") or "unknown").strip().lower()
-    if decision not in {"leave_message", "wait_in_lobby", "decline", "unknown"}:
-        decision = "unknown"
-
-    return {
-        "decision": decision,
-        "confidence": _clamp_confidence(payload.get("confidence", 0.0)),
-    }
-
 
 def _normalize_visitor_name_payload(payload: dict | None) -> dict:
     if not isinstance(payload, dict):
@@ -120,36 +101,3 @@ Pesan pengguna:
     parsed = _llm_json(prompt)
     normalized = _normalize_visitor_goal_payload(parsed)
     return normalized["visitor_goal"]
-
-
-def interpret_unavailable_choice(message: str, flow_state: dict | None = None) -> dict:
-    normalized_message = (message or "").strip()
-    if not normalized_message:
-        return dict(UNAVAILABLE_CHOICE_FALLBACK)
-
-    flow_context = _flow_prompt_context(flow_state)
-    prompt = f"""Tugas: klasifikasikan keputusan pengguna setelah diberi tahu bahwa target sedang tidak tersedia.
-
-KONTEKS:
-- selected_name: {flow_context['selected_name'] or '-'}
-- selected_department: {flow_context['selected_department'] or '-'}
-- stage: {flow_context['stage']}
-
-Balas HANYA JSON valid:
-{{
-  \"decision\": \"leave_message|wait_in_lobby|decline|unknown\",
-  \"confidence\": 0.0
-}}
-
-Aturan:
-- leave_message jika pengguna setuju menitipkan pesan.
-- wait_in_lobby jika pengguna memilih menunggu di lobby/front office.
-- decline jika pengguna menolak, membatalkan, atau tidak ingin lanjut.
-- unknown jika keputusan belum jelas.
-
-Pesan pengguna:
-{normalized_message}
-"""
-
-    parsed = _llm_json(prompt)
-    return _normalize_unavailable_choice_payload(parsed)

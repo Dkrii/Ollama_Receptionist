@@ -19,8 +19,8 @@ def _openrouter_headers() -> dict[str, str]:
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
     }
-    if settings.openrouter_site_url:
-        headers["HTTP-Referer"] = settings.openrouter_site_url
+    if settings.app_url:
+        headers["HTTP-Referer"] = settings.app_url
     if settings.openrouter_site_name:
         headers["X-Title"] = settings.openrouter_site_name
     return headers

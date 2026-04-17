@@ -34,7 +34,7 @@ services:
     volumes:
       - ./app:/app
       - ./knowledge:/workspace/knowledge
-      - chat_runtime:/workspace/runtime
+      - ./runtime:/workspace/runtime
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -48,7 +48,6 @@ services:
 
 volumes:
   vector_data:
-  chat_runtime:
 
 networks:
   kiosk-net:

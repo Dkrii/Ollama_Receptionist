@@ -1,49 +1,11 @@
 import logging
 from typing import Any
 
-import requests
-
 from config import settings
+from lib.contact._http import post_json, request_timeout
 
 
 _logger = logging.getLogger(__name__)
-_http_session = requests.Session()
-
-
-def normalize_contact_mode(value: str | None) -> str:
-    mode = str(value or "").strip().lower()
-    if mode in {"call", "notify"}:
-        return mode
-
-    default_mode = str(getattr(settings, "contact_default_mode", "notify") or "notify").strip().lower()
-    return default_mode if default_mode in {"call", "notify"} else "notify"
-
-
-def _response_payload(response: requests.Response) -> dict[str, Any]:
-    try:
-        payload = response.json()
-        return payload if isinstance(payload, dict) else {"payload": payload}
-    except Exception:
-        text = (response.text or "").strip()
-        return {"raw_text": text[:1000]}
-
-
-def queue_contact_call(*, employee: dict[str, Any]) -> dict[str, Any]:
-    mode = str(getattr(settings, "contact_call_mode", "dummy") or "dummy").strip().lower()
-    if mode != "dummy":
-        raise RuntimeError("CONTACT_CALL_MODE production belum dikonfigurasi.")
-
-    return {
-        "provider": "dummy",
-        "status": "queued_dummy",
-        "detail": f"Permintaan panggilan untuk {employee.get('nama', 'karyawan')} diterima di mode dummy.",
-        "provider_message_id": "",
-        "provider_payload": {
-            "mode": mode,
-            "employee_id": employee.get("id"),
-            "employee_name": employee.get("nama"),
-        },
-    }
 
 
 def dispatch_contact_message(
@@ -53,16 +15,16 @@ def dispatch_contact_message(
     visitor_goal: str,
     message_text: str,
 ) -> dict[str, Any]:
-    mode = str(getattr(settings, "contact_message_delivery_mode", "dummy") or "dummy").strip().lower()
+    app_env = str(getattr(settings, "app_env", "development") or "development").strip().lower()
 
-    if mode != "whatsapp_api":
+    if app_env != "production":
         return {
             "provider": "dummy",
             "status": "sent_dummy",
             "detail": "Dummy WhatsApp dispatcher berhasil (simulasi tanpa API key).",
             "provider_message_id": "",
             "provider_payload": {
-                "mode": mode,
+                "app_env": app_env,
                 "employee_id": employee.get("id"),
                 "employee_name": employee.get("nama"),
             },
@@ -92,19 +54,12 @@ def dispatch_contact_message(
     if not payload["sender_id"]:
         payload.pop("sender_id", None)
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    response = _http_session.post(
-        base_url,
-        json=payload,
-        headers=headers,
-        timeout=max(5, int(getattr(settings, "whatsapp_timeout_seconds", 15) or 15)),
+    _, provider_payload = post_json(
+        url=base_url,
+        payload=payload,
+        bearer_token=api_key,
+        timeout_seconds=request_timeout("whatsapp_timeout_seconds", 15),
     )
-    response.raise_for_status()
-    provider_payload = _response_payload(response)
     provider_message_id = str(
         provider_payload.get("message_id")
         or provider_payload.get("id")
