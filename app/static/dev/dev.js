@@ -1,3 +1,6 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
 const kioskRoot = document.getElementById('kioskRoot');
 const chatBox = document.getElementById('chatBox');
 const input = document.getElementById('messageInput');
@@ -31,11 +34,33 @@ const VAD_SILENCE_END_MS = 900;
 const STT_MIN_FINAL_CHARS = 3;
 const VISION_CDN_VERSION = '0.10.14';
 const FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
-
-const AVATAR_STATES = ['IDLE', 'LISTENING', 'THINGKING', 'TALKING'];
-const avatarCache = new Map();
+const AVATAR_MODEL_URL = '/static/kiosk/models/Animasi-Akebono.glb';
+const AVATAR_VIEW = {
+  cameraFov: 40,
+  cameraPosition: { x: 0, y: 1.0, z: 5.5 },
+  modelPosition: { x: 0, y: -0.95, z: 0 },
+  modelScale: 2.2
+};
+const AVATAR_ARM_POSE = {
+  upperArmDownDeg: 62,
+  foreArmDownDeg: 14
+};
+const BONE_AXIS_VECTORS = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1)
+};
 
 let currentAvatarState = 'IDLE';
+let avatarScene = null;
+let avatarCamera = null;
+let avatarRenderer = null;
+let avatarMixer = null;
+let avatarModel = null;
+let avatarArmRig = null;
+let avatarClock = null;
+let avatarAnimationRafId = 0;
+let avatarResizeObserver = null;
 let isSending = false;
 let isAssistantResponding = false;
 let speechQueue = [];
@@ -837,174 +862,232 @@ function hydrateConversationState() {
   }
 }
 
-function getAvatarPath(state) {
-  return `/static/kiosk/models/${state}.png`;
+function resizeAvatarRenderer() {
+  if (!avatarEl || !avatarRenderer || !avatarCamera) return;
+
+  const width = Math.max(1, avatarEl.clientWidth);
+  const height = Math.max(1, avatarEl.clientHeight);
+
+  avatarRenderer.setSize(width, height, false);
+  avatarCamera.aspect = width / height;
+  avatarCamera.updateProjectionMatrix();
 }
 
-function colorDistance(r1, g1, b1, r2, g2, b2) {
-  const dr = r1 - r2;
-  const dg = g1 - g2;
-  const db = b1 - b2;
-  return Math.sqrt((dr * dr) + (dg * dg) + (db * db));
+function toRad(deg) {
+  return (deg * Math.PI) / 180;
 }
 
-function getBorderPalette(data, width, height) {
-  const bucketSize = 16;
-  const buckets = new Map();
-  const step = Math.max(1, Math.floor(Math.min(width, height) / 128));
-
-  const addSample = (x, y) => {
-    const index = (y * width + x) * 4;
-    const r = data[index];
-    const g = data[index + 1];
-    const b = data[index + 2];
-    const a = data[index + 3];
-    if (a < 200) return;
-
-    const key = [
-      Math.round(r / bucketSize) * bucketSize,
-      Math.round(g / bucketSize) * bucketSize,
-      Math.round(b / bucketSize) * bucketSize
-    ].join(',');
-
-    const existing = buckets.get(key);
-    if (existing) {
-      existing.r += r;
-      existing.g += g;
-      existing.b += b;
-      existing.count += 1;
-    } else {
-      buckets.set(key, { r, g, b, count: 1 });
-    }
-  };
-
-  for (let x = 0; x < width; x += step) {
-    addSample(x, 0);
-    addSample(x, height - 1);
-  }
-
-  for (let y = 0; y < height; y += step) {
-    addSample(0, y);
-    addSample(width - 1, y);
-  }
-
-  return [...buckets.values()]
-    .sort((left, right) => right.count - left.count)
-    .slice(0, 6)
-    .map((entry) => ({
-      r: entry.r / entry.count,
-      g: entry.g / entry.count,
-      b: entry.b / entry.count
-    }));
+function isLeftBone(name) {
+  return /(left|kiri|_l\b|\.l\b|-l\b|\bl\b)/i.test(name);
 }
 
-function isLikelyBackgroundPixel(data, index, palette) {
-  const r = data[index];
-  const g = data[index + 1];
-  const b = data[index + 2];
-  const a = data[index + 3];
-
-  if (a < 18) return true;
-
-  const maxChannel = Math.max(r, g, b);
-  const minChannel = Math.min(r, g, b);
-  const brightness = (r + g + b) / 3;
-  const saturation = maxChannel - minChannel;
-  const nearNeutral = saturation < 36;
-
-  if (brightness > 238 && saturation < 24) {
-    return true;
-  }
-
-  let nearestDistance = Infinity;
-  for (const color of palette) {
-    nearestDistance = Math.min(nearestDistance, colorDistance(r, g, b, color.r, color.g, color.b));
-  }
-
-  return nearNeutral && nearestDistance < 42;
+function isRightBone(name) {
+  return /(right|kanan|_r\b|\.r\b|-r\b|\br\b)/i.test(name);
 }
 
-function removeConnectedBackdrop(image) {
-  const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth || image.width;
-  canvas.height = image.naturalHeight || image.height;
-
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(image, 0, 0);
-
-  const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data, width, height } = frame;
-  const palette = getBorderPalette(data, width, height);
-  const visited = new Uint8Array(width * height);
-  const queue = new Uint32Array(width * height);
-  let queueStart = 0;
-  let queueEnd = 0;
-
-  const enqueueIfBackground = (x, y) => {
-    const offset = y * width + x;
-    if (visited[offset]) return;
-    visited[offset] = 1;
-
-    const index = offset * 4;
-    if (!isLikelyBackgroundPixel(data, index, palette)) {
-      return;
-    }
-
-    queue[queueEnd++] = offset;
-  };
-
-  for (let x = 0; x < width; x += 1) {
-    enqueueIfBackground(x, 0);
-    enqueueIfBackground(x, height - 1);
+function getPrimaryBoneChild(bone) {
+  if (!bone) return null;
+  for (const child of bone.children || []) {
+    if (child?.isBone) return child;
   }
-
-  for (let y = 1; y < height - 1; y += 1) {
-    enqueueIfBackground(0, y);
-    enqueueIfBackground(width - 1, y);
-  }
-
-  while (queueStart < queueEnd) {
-    const offset = queue[queueStart++];
-    const index = offset * 4;
-    data[index + 3] = 0;
-
-    const x = offset % width;
-    const y = Math.floor(offset / width);
-
-    if (x > 0) enqueueIfBackground(x - 1, y);
-    if (x + 1 < width) enqueueIfBackground(x + 1, y);
-    if (y > 0) enqueueIfBackground(x, y - 1);
-    if (y + 1 < height) enqueueIfBackground(x, y + 1);
-  }
-
-  context.putImageData(frame, 0, 0);
-  return canvas.toDataURL('image/png');
+  return null;
 }
 
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.decoding = 'async';
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
+function captureBoneDeltaY(parentBone, childBone) {
+  if (!parentBone || !childBone) return 0;
+  const parentPos = new THREE.Vector3();
+  const childPos = new THREE.Vector3();
+  parentBone.getWorldPosition(parentPos);
+  childBone.getWorldPosition(childPos);
+  return childPos.y - parentPos.y;
 }
 
-async function preloadAvatarStates() {
-  await Promise.all(
-    AVATAR_STATES.map(async (state) => {
-      const source = getAvatarPath(state);
-      try {
-        const image = await loadImage(source);
-        avatarCache.set(state, removeConnectedBackdrop(image));
-      } catch (error) {
-        avatarCache.set(state, source);
+function findBestLoweringRotation(rootModel, bone, childBone, baseQuaternion, offsetRad) {
+  if (!rootModel || !bone || !childBone || !baseQuaternion || !offsetRad) {
+    return { axis: 'z', sign: 1 };
+  }
+
+  const originalQuaternion = bone.quaternion.clone();
+  rootModel.updateMatrixWorld(true);
+  const baselineDeltaY = captureBoneDeltaY(bone, childBone);
+
+  let best = { axis: 'z', sign: 1, score: Number.NEGATIVE_INFINITY };
+  const axes = ['x', 'y', 'z'];
+
+  for (const axis of axes) {
+    for (const sign of [1, -1]) {
+      const offsetQuaternion = new THREE.Quaternion().setFromAxisAngle(BONE_AXIS_VECTORS[axis], sign * offsetRad);
+      bone.quaternion.copy(baseQuaternion).multiply(offsetQuaternion);
+      rootModel.updateMatrixWorld(true);
+      const candidateDeltaY = captureBoneDeltaY(bone, childBone);
+      const score = baselineDeltaY - candidateDeltaY;
+
+      if (score > best.score) {
+        best = { axis, sign, score };
       }
-    })
+    }
+  }
+
+  bone.quaternion.copy(originalQuaternion);
+  rootModel.updateMatrixWorld(true);
+  return { axis: best.axis, sign: best.sign };
+}
+
+function buildAvatarArmRig(rootModel) {
+  const bones = {
+    leftUpper: null,
+    rightUpper: null,
+    leftFore: null,
+    rightFore: null
+  };
+
+  rootModel.traverse((node) => {
+    if (!node || !node.isBone || !node.name) return;
+    const name = node.name.toLowerCase();
+
+    const isUpper = /(upperarm|shoulder|clavicle|arm|lengan|bahu)/i.test(name)
+      && !/(forearm|lowerarm|elbow|hand|wrist|siku|telapak)/i.test(name);
+    const isFore = /(forearm|lowerarm|elbow|lenganbawah|siku)/i.test(name);
+
+    if (isUpper && isLeftBone(name)) bones.leftUpper = node;
+    if (isUpper && isRightBone(name)) bones.rightUpper = node;
+    if (isFore && isLeftBone(name)) bones.leftFore = node;
+    if (isFore && isRightBone(name)) bones.rightFore = node;
+  });
+
+  const upperOffset = toRad(AVATAR_ARM_POSE.upperArmDownDeg);
+  const foreOffset = toRad(AVATAR_ARM_POSE.foreArmDownDeg);
+  const rigEntries = [];
+
+  const pushRigEntry = (bone, childBone, offsetRad) => {
+    if (!bone || !offsetRad) return;
+    const baseQuaternion = bone.quaternion.clone();
+    const targetChild = childBone || getPrimaryBoneChild(bone);
+    const { axis, sign } = findBestLoweringRotation(rootModel, bone, targetChild, baseQuaternion, offsetRad);
+    rigEntries.push({ bone, baseQuaternion, axis, sign, offsetRad });
+  };
+
+  pushRigEntry(bones.leftUpper, bones.leftFore, upperOffset);
+  pushRigEntry(bones.rightUpper, bones.rightFore, upperOffset);
+  pushRigEntry(bones.leftFore, getPrimaryBoneChild(bones.leftFore), foreOffset);
+  pushRigEntry(bones.rightFore, getPrimaryBoneChild(bones.rightFore), foreOffset);
+
+  return {
+    model: rootModel,
+    entries: rigEntries
+  };
+}
+
+function applyLoweredArmPose(rootModel) {
+  if (!rootModel) return;
+
+  if (!avatarArmRig || avatarArmRig.model !== rootModel) {
+    avatarArmRig = buildAvatarArmRig(rootModel);
+  }
+
+  for (const entry of avatarArmRig.entries || []) {
+    const offsetQuaternion = new THREE.Quaternion().setFromAxisAngle(
+      BONE_AXIS_VECTORS[entry.axis] || BONE_AXIS_VECTORS.z,
+      entry.sign * entry.offsetRad
+    );
+    entry.bone.quaternion.copy(entry.baseQuaternion).multiply(offsetQuaternion);
+  }
+}
+
+function startAvatarAnimationLoop() {
+  if (!avatarRenderer || !avatarScene || !avatarCamera || !avatarClock) return;
+
+  const loop = () => {
+    avatarAnimationRafId = window.requestAnimationFrame(loop);
+
+    const delta = avatarClock.getDelta();
+    if (avatarMixer) {
+      avatarMixer.update(delta);
+    }
+
+    if (avatarModel) {
+      applyLoweredArmPose(avatarModel);
+    }
+
+    avatarRenderer.render(avatarScene, avatarCamera);
+  };
+
+  if (avatarAnimationRafId) {
+    window.cancelAnimationFrame(avatarAnimationRafId);
+  }
+
+  loop();
+}
+
+function initAvatar3D() {
+  if (!avatarEl || avatarRenderer) return;
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'kiosk-avatar-canvas';
+  avatarEl.innerHTML = '';
+  avatarEl.appendChild(canvas);
+
+  avatarRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  avatarRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+  avatarScene = new THREE.Scene();
+  avatarCamera = new THREE.PerspectiveCamera(AVATAR_VIEW.cameraFov, 1, 0.1, 100);
+  avatarCamera.position.set(
+    AVATAR_VIEW.cameraPosition.x,
+    AVATAR_VIEW.cameraPosition.y,
+    AVATAR_VIEW.cameraPosition.z
   );
 
-  setAvatarState(currentAvatarState);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.35);
+  avatarScene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.65);
+  directionalLight.position.set(2.5, 4, 3.5);
+  avatarScene.add(directionalLight);
+
+  const loader = new GLTFLoader();
+  loader.load(
+    AVATAR_MODEL_URL,
+    (gltf) => {
+      avatarModel = gltf.scene;
+      avatarArmRig = null;
+      avatarModel.position.set(
+        AVATAR_VIEW.modelPosition.x,
+        AVATAR_VIEW.modelPosition.y,
+        AVATAR_VIEW.modelPosition.z
+      );
+      avatarModel.scale.setScalar(AVATAR_VIEW.modelScale);
+      avatarScene.add(avatarModel);
+
+      if (gltf.animations && gltf.animations.length > 0) {
+        avatarMixer = new THREE.AnimationMixer(avatarModel);
+        avatarMixer.clipAction(gltf.animations[0]).play();
+      }
+
+      applyLoweredArmPose(avatarModel);
+    },
+    undefined,
+    (error) => {
+      console.warn('Gagal memuat avatar 3D Animasi-Akebono.glb', error);
+    }
+  );
+
+  avatarClock = new THREE.Clock();
+  resizeAvatarRenderer();
+  startAvatarAnimationLoop();
+
+  window.addEventListener('resize', resizeAvatarRenderer);
+
+  if (window.ResizeObserver) {
+    avatarResizeObserver = new window.ResizeObserver(() => {
+      resizeAvatarRenderer();
+    });
+    avatarResizeObserver.observe(avatarEl);
+  }
+}
+
+function preloadAvatarStates() {
+  initAvatar3D();
 }
 
 function setAvatarState(state) {
@@ -1012,10 +1095,6 @@ function setAvatarState(state) {
 
   if (!avatarEl) return;
 
-  const source = avatarCache.get(state) || getAvatarPath(state);
-  if (avatarEl.src !== source) {
-    avatarEl.src = source;
-  }
   avatarEl.dataset.state = state;
 }
 
