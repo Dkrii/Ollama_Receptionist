@@ -6,6 +6,8 @@ import os
 class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "development").strip().lower()
     app_url: str = os.getenv("APP_URL", "").strip().rstrip("/")
+    contact_call_provider: str = os.getenv("CONTACT_CALL_PROVIDER", "twilio").strip().lower()
+    contact_messaging_provider: str = os.getenv("CONTACT_MESSAGING_PROVIDER", "wablas").strip().lower()
 
     ai_provider: str = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 
@@ -57,10 +59,16 @@ class Settings(BaseModel):
     twilio_api_key_secret: str = os.getenv("TWILIO_API_KEY_SECRET", "").strip()
     twilio_twiml_app_sid: str = os.getenv("TWILIO_TWIML_APP_SID", "").strip()
     contact_call_from_number: str = os.getenv("CONTACT_CALL_FROM_NUMBER", "").strip()
-    whatsapp_api_base_url: str = os.getenv("WHATSAPP_API_BASE_URL", "").strip()
-    whatsapp_api_key: str = os.getenv("WHATSAPP_API_KEY", "").strip()
-    whatsapp_sender_id: str = os.getenv("WHATSAPP_SENDER_ID", "").strip()
-    whatsapp_timeout_seconds: int = int(os.getenv("WHATSAPP_TIMEOUT_SECONDS", "15"))
+    telnyx_api_base_url: str = os.getenv("TELNYX_API_BASE_URL", "https://api.telnyx.com").strip().rstrip("/")
+    telnyx_api_key: str = os.getenv("TELNYX_API_KEY", "").strip()
+    telnyx_telephony_credential_id: str = os.getenv("TELNYX_TELEPHONY_CREDENTIAL_ID", "").strip()
+    telnyx_caller_id_number: str = os.getenv("TELNYX_CALLER_ID_NUMBER", "").strip()
+    telnyx_timeout_seconds: int = int(os.getenv("TELNYX_TIMEOUT_SECONDS", "15"))
+    wablas_base_url: str = os.getenv("WABLAS_BASE_URL", "https://wablas.com").strip().rstrip("/")
+    wablas_token: str = os.getenv("WABLAS_TOKEN", "").strip()
+    wablas_secret_key: str = os.getenv("WABLAS_SECRET_KEY", "").strip()
+    wablas_timeout_seconds: int = int(os.getenv("WABLAS_TIMEOUT_SECONDS", "15"))
+    wablas_test_group_id: str = os.getenv("WABLAS_TEST_GROUP_ID", "").strip()
 
 
 settings = Settings()

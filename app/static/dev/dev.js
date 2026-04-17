@@ -17,6 +17,7 @@ const callPanel = document.getElementById('callPanel');
 const callPanelEyebrow = document.getElementById('callPanelEyebrow');
 const callPanelTitle = document.getElementById('callPanelTitle');
 const callPanelStatus = document.getElementById('callPanelStatus');
+const remoteMediaEl = document.getElementById('remoteMedia');
 const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
 const CONVERSATION_ACTIVITY_STORAGE_KEY = 'kioskConversationLastActivity';
 const SESSION_IDLE_MS = 5 * 60 * 1000;
@@ -114,8 +115,10 @@ let currentCallConnection = null;
 let currentCallConnected = false;
 let currentCallCompletionHandled = false;
 let currentCallBackendStatus = 'idle';
+let currentCallProvider = '';
 let isStartingTwoWayCall = false;
 let twilioDevice = null;
+let telnyxClient = null;
 let pendingCallAction = null;
 let pendingFollowUp = null;
 let callStatusPollTimer = null;
@@ -1296,6 +1299,33 @@ async function reportCallFailure(callSessionId, status = 'failed', reason = 'cli
   }
 }
 
+async function reportClientCallStatus({
+  callSessionId,
+  provider,
+  status,
+  providerCallId = '',
+  providerPayload = null,
+}) {
+  const normalizedSessionId = String(callSessionId || '').trim();
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (!normalizedSessionId || !normalizedStatus) return;
+
+  try {
+    await fetch('/api/contact/call/client-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        call_session_id: normalizedSessionId,
+        provider: String(provider || '').trim().toLowerCase(),
+        status: normalizedStatus,
+        provider_call_id: String(providerCallId || '').trim(),
+        provider_payload: providerPayload,
+      }),
+    });
+  } catch (error) {
+  }
+}
+
 function hasCallAttemptStarted() {
   const status = String(currentCallBackendStatus || '').trim().toLowerCase();
   return Boolean(currentCallConnected || (status && status !== 'preparing' && status !== 'idle'));
@@ -1329,6 +1359,62 @@ async function fetchCallToken(callSessionId) {
   return payload;
 }
 
+function getCallProviderName(callAction) {
+  return String(callAction?.provider || 'twilio').trim().toLowerCase() || 'twilio';
+}
+
+function normalizeIndonesiaPhoneForDialer(value) {
+  const compact = String(value || '').replace(/[^\d+]/g, '');
+  if (!compact) return '';
+
+  let phone = compact;
+  if (phone.startsWith('+')) {
+    phone = phone.slice(1);
+  }
+
+  if (phone.startsWith('0')) {
+    phone = `62${phone.slice(1)}`;
+  } else if (phone.startsWith('8')) {
+    phone = `62${phone}`;
+  }
+
+  if (!/^\d{10,}$/.test(phone)) {
+    return '';
+  }
+  return `+${phone}`;
+}
+
+function serializeTelnyxCall(call) {
+  if (!call || typeof call !== 'object') return null;
+  return {
+    id: String(call.id || call.callID || call.callId || '').trim(),
+    state: String(call.state || '').trim().toLowerCase(),
+    prev_state: String(call.prevState || call.prev_state || '').trim().toLowerCase(),
+    direction: String(call.direction || '').trim().toLowerCase(),
+    destination_number: String(call.destinationNumber || '').trim(),
+    caller_number: String(call.callerNumber || '').trim(),
+    caller_name: String(call.callerName || '').trim(),
+  };
+}
+
+function getTelnyxCallId(call) {
+  const serialized = serializeTelnyxCall(call) || {};
+  return String(serialized.id || '').trim();
+}
+
+function mapTelnyxCallState(rawState) {
+  const normalized = String(rawState || '').trim().toLowerCase();
+  if (normalized === 'new') return 'preparing';
+  if (normalized === 'requesting' || normalized === 'trying' || normalized === 'recovering') return 'dialing_employee';
+  if (normalized === 'ringing' || normalized === 'answering' || normalized === 'early') return 'ringing';
+  if (normalized === 'active' || normalized === 'held') return 'connected';
+  if (normalized === 'hangup' || normalized === 'destroy' || normalized === 'purge') return 'completed';
+  if (normalized === 'busy' || normalized === 'rejected') return 'busy';
+  if (normalized === 'timeout') return 'no_response';
+  if (normalized === 'failed' || normalized === 'error') return 'failed';
+  return 'failed';
+}
+
 async function refreshTwilioToken() {
   if (!twilioDevice || !currentCallSession?.call_session_id) return;
   try {
@@ -1338,6 +1424,28 @@ async function refreshTwilioToken() {
   } catch (error) {
     console.warn('Twilio token refresh gagal', error);
   }
+}
+
+function cleanupTelnyxClient() {
+  if (!telnyxClient) return;
+  try {
+    if (typeof telnyxClient.disconnect === 'function') {
+      telnyxClient.disconnect();
+    }
+  } catch (error) {
+  }
+  telnyxClient = null;
+}
+
+function cleanupTwilioDevice() {
+  if (!twilioDevice) return;
+  try {
+    if (typeof twilioDevice.destroy === 'function') {
+      twilioDevice.destroy();
+    }
+  } catch (error) {
+  }
+  twilioDevice = null;
 }
 
 async function ensureTwilioDevice(callAction) {
@@ -1372,6 +1480,116 @@ async function ensureTwilioDevice(callAction) {
   }
 
   return twilioDevice;
+}
+
+function handleTelnyxNotification(notification) {
+  if (!currentCallSession || !notification || notification.type !== 'callUpdate') return;
+
+  const call = notification.call || null;
+  if (!call) return;
+
+  currentCallConnection = call;
+  const rawState = String(call.state || '').trim().toLowerCase();
+  const mappedStatus = mapTelnyxCallState(rawState);
+  const providerCallId = getTelnyxCallId(call);
+  const providerPayload = {
+    type: String(notification.type || '').trim(),
+    status: mappedStatus,
+    raw_state: rawState,
+    call: serializeTelnyxCall(call),
+  };
+
+  if (mappedStatus === 'dialing_employee' || mappedStatus === 'ringing') {
+    stopCallStartTimeout();
+    setCallStatusPanelState(
+      'active',
+      buildCallPanelTitle(currentCallSession),
+      buildCallStatusText(mappedStatus)
+    );
+  } else if (mappedStatus === 'connected') {
+    currentCallConnected = true;
+    stopCallStartTimeout();
+    setCallStatusPanelState(
+      'connected',
+      buildCallPanelTitle(currentCallSession),
+      buildCallStatusText('connected')
+    );
+    updateMicState();
+  }
+
+  reportClientCallStatus({
+    callSessionId: currentCallSession.call_session_id,
+    provider: 'telnyx',
+    status: mappedStatus,
+    providerCallId,
+    providerPayload,
+  });
+
+  if (mappedStatus === 'busy' || mappedStatus === 'no_response' || mappedStatus === 'failed') {
+    finishActiveCall({
+      mode: 'failed',
+      title: buildCallPanelTitle(currentCallSession),
+      detail: buildCallStatusText(mappedStatus),
+    });
+    return;
+  }
+
+  if (mappedStatus === 'completed') {
+    finishActiveCall({
+      mode: currentCallConnected ? 'ended' : 'failed',
+      title: buildCallPanelTitle(currentCallSession),
+      detail: buildCallStatusText(currentCallConnected ? 'completed' : 'failed'),
+    });
+  }
+}
+
+async function ensureTelnyxClient(callAction) {
+  if (!window.TelnyxRTC) {
+    throw new Error('SDK Telnyx belum termuat. Refresh halaman atau cek integrasi SDK Telnyx.');
+  }
+
+  const info = typeof window.TelnyxRTC.webRTCInfo === 'function'
+    ? window.TelnyxRTC.webRTCInfo()
+    : null;
+  if (info && info.supportWebRTC === false) {
+    throw new Error('Browser ini tidak mendukung Telnyx WebRTC.');
+  }
+
+  cleanupTelnyxClient();
+
+  const tokenPayload = await fetchCallToken(callAction.call_session_id);
+  telnyxClient = new window.TelnyxRTC({
+    login_token: tokenPayload.token,
+  });
+
+  if (remoteMediaEl) {
+    telnyxClient.remoteElement = remoteMediaEl.id;
+  }
+
+  return await new Promise((resolve, reject) => {
+    const cleanupListeners = () => {
+      if (!telnyxClient || typeof telnyxClient.off !== 'function') return;
+      telnyxClient.off('telnyx.ready');
+      telnyxClient.off('telnyx.error');
+    };
+
+    telnyxClient.on('telnyx.ready', () => {
+      cleanupListeners();
+      resolve({ client: telnyxClient, tokenPayload });
+    });
+    telnyxClient.on('telnyx.error', (error) => {
+      cleanupListeners();
+      reject(new Error(String(error?.message || 'Telnyx WebRTC gagal diinisialisasi.')));
+    });
+    telnyxClient.on('telnyx.notification', handleTelnyxNotification);
+
+    try {
+      telnyxClient.connect();
+    } catch (error) {
+      cleanupListeners();
+      reject(error);
+    }
+  });
 }
 
 function applyFallbackAfterCall() {
@@ -1418,10 +1636,17 @@ function finishActiveCall({ mode, title, detail }) {
     contactFlowState = { stage: 'idle' };
   }
 
+  if (currentCallProvider === 'twilio') {
+    cleanupTwilioDevice();
+  } else if (currentCallProvider === 'telnyx') {
+    cleanupTelnyxClient();
+  }
+
   currentCallSession = null;
   currentCallConnection = null;
   currentCallConnected = false;
   currentCallBackendStatus = 'idle';
+  currentCallProvider = '';
   resetCallPanel();
   if (mode === 'failed') {
     showPromptOverlay(fallbackFollowUp);
@@ -1610,6 +1835,7 @@ async function startTwoWayCall(callAction) {
   currentCallConnected = false;
   currentCallCompletionHandled = false;
   currentCallBackendStatus = 'preparing';
+  currentCallProvider = getCallProviderName(callAction);
 
   suspendAudioForCall();
   activateConversationLayout();
@@ -1622,6 +1848,28 @@ async function startTwoWayCall(callAction) {
   startCallConnectTimeout(callAction);
 
   try {
+    if (currentCallProvider === 'telnyx') {
+      const { client, tokenPayload } = await ensureTelnyxClient(callAction);
+      const destinationNumber = normalizeIndonesiaPhoneForDialer(callAction?.employee?.nomor_wa || '');
+      if (!destinationNumber) {
+        throw new Error('Nomor telepon karyawan tidak valid untuk Telnyx.');
+      }
+
+      const callerNumber = normalizeIndonesiaPhoneForDialer(tokenPayload?.caller_number || '');
+      const callOptions = { destinationNumber };
+      if (callerNumber) {
+        callOptions.callerNumber = callerNumber;
+      }
+
+      currentCallConnection = client.newCall(callOptions);
+      isStartingTwoWayCall = false;
+      return;
+    }
+
+    if (currentCallProvider !== 'twilio') {
+      throw new Error(`provider_${currentCallProvider || 'unknown'}_not_supported`);
+    }
+
       const device = await ensureTwilioDevice(callAction);
       const connection = await device.connect({
         params: {
@@ -1632,7 +1880,20 @@ async function startTwoWayCall(callAction) {
       isStartingTwoWayCall = false;
       wireTwilioCallEvents(connection);
   } catch (error) {
+    reportCallFailure(
+      callAction.call_session_id,
+      'failed',
+      String(error?.message || 'client_start_failed').trim().toLowerCase().replace(/\s+/g, '_')
+    );
+    if (currentCallProvider === 'telnyx') {
+      cleanupTelnyxClient();
+    }
     isStartingTwoWayCall = false;
+    finishActiveCall({
+      mode: 'failed',
+      title: buildCallPanelTitle(callAction),
+      detail: buildCallStatusText('failed'),
+    });
   }
 }
 

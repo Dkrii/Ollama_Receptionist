@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from api.contact.schemas import ContactCallSessionRequest
+from api.contact.schemas import ContactCallClientStatusRequest, ContactCallSessionRequest
 from api.contact.service import ContactCallService
 
 
@@ -58,6 +58,15 @@ async def fail_call(request: Request):
             reason=str((payload or {}).get("reason") or "client_error"),
             request=request,
         )
+        return JSONResponse({"ok": True, "call": updated})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/client-status")
+def sync_client_call_status(payload: ContactCallClientStatusRequest, request: Request):
+    try:
+        updated = ContactCallService.sync_client_status(payload.model_dump(), request=request)
         return JSONResponse({"ok": True, "call": updated})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -4,19 +4,15 @@ from typing import Any
 from fastapi import Request
 
 from api.admin.repository import AdminRepository
-from config import settings
-from lib.contact.call_session import (
+from lib.contact.call import (
     ACTIVE_CALL_STATUSES,
-    build_dev_identity,
-    build_status_detail,
-    build_twiml,
-    call_provider,
-    create_access_token,
-    create_call_session_id,
-    mask_value,
-    normalize_twilio_call_status,
-    require_employee_phone,
-    require_twilio_settings,
+    build_contact_call_status_detail,
+    create_contact_call_session,
+    issue_contact_call_access_token,
+    mask_contact_value,
+    parse_contact_call_client_status_payload,
+    parse_contact_call_status_payload,
+    render_contact_call_twiml,
 )
 
 _logger = logging.getLogger(__name__)
@@ -46,41 +42,23 @@ class ContactCallService:
 
     @staticmethod
     def create_session_for_employee(employee: dict[str, Any]) -> dict[str, Any]:
-        provider = call_provider()
         employee_name = str(employee.get("nama") or "karyawan")
         employee_phone = str(employee.get("nomor_wa") or "")
-        call_session_id = create_call_session_id()
-        dev_identity = build_dev_identity(call_session_id)
-
-        failure_reason = ""
-        initial_status = "preparing"
-        initial_detail = build_status_detail(employee_name=employee_name, status="preparing")
-        provider_payload: dict[str, Any] = {
-            "app_env": str(getattr(settings, "app_env", "") or "").strip().lower(),
-            "channel": "two_way_call",
-        }
-
-        try:
-            require_employee_phone(employee)
-            require_twilio_settings()
-        except Exception as exc:
-            failure_reason = str(exc)
-            initial_status = "failed"
-            initial_detail = build_status_detail(employee_name=employee_name, status="failed")
-            provider_payload["setup_error"] = failure_reason
+        session_result = create_contact_call_session(employee)
 
         return AdminRepository.create_contact_call(
             employee_id=int(employee["id"]),
             employee_nama=employee_name,
             employee_departemen=str(employee.get("departemen") or ""),
             employee_nomor_wa=employee_phone,
-            call_status=initial_status,
-            call_detail=initial_detail,
-            call_provider=provider,
-            provider_payload=provider_payload,
-            call_session_id=call_session_id,
-            dev_identity=dev_identity,
-            failure_reason=failure_reason or None,
+            call_status=str(session_result.get("status") or "failed"),
+            call_detail=str(session_result.get("detail") or "Tidak terhubung."),
+            call_provider=str(session_result.get("provider") or "dummy"),
+            provider_payload=session_result.get("provider_payload"),
+            call_session_id=str(session_result.get("session_id") or ""),
+            dev_identity=str(session_result.get("dev_identity") or ""),
+            provider_call_id=str(session_result.get("provider_call_id") or "").strip() or None,
+            failure_reason=str(session_result.get("failure_reason") or "").strip() or None,
         )
 
     @staticmethod
@@ -89,19 +67,18 @@ class ContactCallService:
         if not stored_call:
             raise RuntimeError("Sesi telepon tidak ditemukan.")
 
-        token = create_access_token(identity=str(stored_call.get("dev_identity") or ""))
+        token_payload = issue_contact_call_access_token(
+            provider=str(stored_call.get("call_provider") or ""),
+            identity=str(stored_call.get("dev_identity") or ""),
+            call_session_id=call_session_id,
+        )
         _logger.info(
             "contact.call.token id=%s session=%s provider=%s",
             ContactCallService._request_id(request),
-            mask_value(str(stored_call.get("call_session_id") or ""), head=6, tail=4),
-            str(stored_call.get("call_provider") or call_provider()),
+            mask_contact_value(str(stored_call.get("call_session_id") or ""), head=6, tail=4),
+            str(token_payload.get("provider") or stored_call.get("call_provider") or "-"),
         )
-        return {
-            "provider": str(stored_call.get("call_provider") or call_provider()),
-            "token": token,
-            "identity": str(stored_call.get("dev_identity") or ""),
-            "call_session_id": call_session_id,
-        }
+        return token_payload
 
     @staticmethod
     def get_status(call_session_id: str) -> dict[str, Any]:
@@ -133,11 +110,12 @@ class ContactCallService:
         updated = AdminRepository.update_contact_call_status(
             call_id=int(stored_call["id"]),
             call_status=normalized_status,
-            call_detail=build_status_detail(
+            call_detail=build_contact_call_status_detail(
+                provider=str(stored_call.get("call_provider") or ""),
                 employee_name=str(stored_call.get("employee_nama") or "karyawan"),
                 status=normalized_status,
             ),
-            call_provider=str(stored_call.get("call_provider") or call_provider()),
+            call_provider=str(stored_call.get("call_provider") or "dummy"),
             provider_call_id=str(
                 stored_call.get("provider_call_id")
                 or stored_call.get("twilio_call_sid")
@@ -154,7 +132,7 @@ class ContactCallService:
         _logger.info(
             "contact.call.fail id=%s session=%s status=%s reason=%s",
             ContactCallService._request_id(request),
-            mask_value(call_session_id, head=6, tail=4),
+            mask_contact_value(call_session_id, head=6, tail=4),
             normalized_status,
             str(reason or "client_error").strip().lower() or "-",
         )
@@ -167,30 +145,33 @@ class ContactCallService:
         if not stored_call:
             raise RuntimeError("Sesi telepon tidak ditemukan.")
 
-        twilio_call_sid = str(payload.get("CallSid") or "").strip()
+        provider = str(stored_call.get("call_provider") or "").strip().lower()
+        provider_call_id = str(payload.get("CallSid") or "").strip()
 
         AdminRepository.update_contact_call_status(
             call_id=int(stored_call["id"]),
             call_status="dialing_employee",
-            call_detail=build_status_detail(
+            call_detail=build_contact_call_status_detail(
+                provider=provider,
                 employee_name=str(stored_call.get("employee_nama") or "karyawan"),
                 status="dialing_employee",
             ),
-            call_provider=str(stored_call.get("call_provider") or call_provider()),
-            provider_call_id=twilio_call_sid,
-            twilio_call_sid=twilio_call_sid,
+            call_provider=provider or "dummy",
+            provider_call_id=provider_call_id or None,
+            twilio_call_sid=provider_call_id or None if provider == "twilio" else None,
             provider_payload=payload,
         )
 
         _logger.info(
             "contact.call.twiml id=%s session=%s sid=%s employee=%s",
             ContactCallService._request_id(request),
-            mask_value(call_session_id, head=6, tail=4),
-            mask_value(twilio_call_sid),
+            mask_contact_value(call_session_id, head=6, tail=4),
+            mask_contact_value(provider_call_id),
             str(stored_call.get("employee_nama") or "-"),
         )
 
-        return build_twiml(
+        return render_contact_call_twiml(
+            provider=provider,
             call_session_id=call_session_id,
             employee_phone=str(stored_call.get("employee_nomor_wa") or ""),
         )
@@ -202,33 +183,86 @@ class ContactCallService:
         if not stored_call:
             raise RuntimeError("Sesi telepon tidak ditemukan.")
 
-        raw_status = str(payload.get("DialCallStatus") or payload.get("CallStatus") or "").strip()
-        call_status = normalize_twilio_call_status(raw_status)
-        twilio_call_sid = str(payload.get("DialCallSid") or payload.get("CallSid") or "").strip()
-        call_detail = build_status_detail(
+        provider = str(stored_call.get("call_provider") or "").strip().lower()
+        status_update = parse_contact_call_status_payload(
+            provider=provider,
+            payload=payload,
             employee_name=str(stored_call.get("employee_nama") or "karyawan"),
-            status=call_status,
         )
-        failure_reason = raw_status if call_status in {"busy", "no_response", "failed"} else ""
 
         updated = AdminRepository.update_contact_call_status(
             call_id=int(stored_call["id"]),
-            call_status=call_status,
-            call_detail=call_detail,
-            call_provider=str(stored_call.get("call_provider") or call_provider()),
-            provider_call_id=twilio_call_sid,
-            twilio_call_sid=twilio_call_sid,
-            provider_payload=payload,
-            failure_reason=failure_reason,
-            mark_connected=call_status == "connected",
-            mark_ended=call_status not in ACTIVE_CALL_STATUSES,
+            call_status=str(status_update.get("status") or "failed"),
+            call_detail=str(status_update.get("detail") or "Tidak terhubung."),
+            call_provider=provider or "dummy",
+            provider_call_id=str(status_update.get("provider_call_id") or "").strip() or None,
+            twilio_call_sid=(
+                str(status_update.get("provider_call_id") or "").strip() or None
+                if provider == "twilio"
+                else None
+            ),
+            provider_payload=status_update.get("provider_payload"),
+            failure_reason=str(status_update.get("failure_reason") or "").strip() or None,
+            mark_connected=bool(status_update.get("mark_connected")),
+            mark_ended=bool(status_update.get("mark_ended")),
         )
         _logger.info(
             "contact.call.status id=%s session=%s sid=%s status=%s raw=%s",
             ContactCallService._request_id(request),
-            mask_value(call_session_id, head=6, tail=4),
-            mask_value(twilio_call_sid),
-            call_status,
-            raw_status or "-",
+            mask_contact_value(call_session_id, head=6, tail=4),
+            mask_contact_value(str(status_update.get("provider_call_id") or "")),
+            str(status_update.get("status") or "failed"),
+            str(payload.get("DialCallStatus") or payload.get("CallStatus") or "").strip() or "-",
+        )
+        return updated or stored_call
+
+    @staticmethod
+    def sync_client_status(payload: dict[str, Any], request: Request | None = None) -> dict[str, Any]:
+        call_session_id = str((payload or {}).get("call_session_id") or "").strip()
+        if len(call_session_id) < 8:
+            raise RuntimeError("call_session_id wajib dikirim.")
+
+        stored_call = AdminRepository.get_contact_call_by_session_id(call_session_id)
+        if not stored_call:
+            raise RuntimeError("Sesi telepon tidak ditemukan.")
+
+        provider = str(stored_call.get("call_provider") or "").strip().lower()
+        requested_provider = str((payload or {}).get("provider") or "").strip().lower()
+        if requested_provider and requested_provider != provider:
+            raise RuntimeError("Provider call tidak sesuai dengan sesi yang aktif.")
+
+        current_status = str(stored_call.get("call_status") or "").strip().lower()
+        if current_status and current_status not in ACTIVE_CALL_STATUSES:
+            return stored_call
+
+        status_update = parse_contact_call_client_status_payload(
+            provider=provider,
+            payload=payload,
+            employee_name=str(stored_call.get("employee_nama") or "karyawan"),
+        )
+
+        updated = AdminRepository.update_contact_call_status(
+            call_id=int(stored_call["id"]),
+            call_status=str(status_update.get("status") or "failed"),
+            call_detail=str(status_update.get("detail") or "Tidak terhubung."),
+            call_provider=provider or "dummy",
+            provider_call_id=str(status_update.get("provider_call_id") or "").strip() or None,
+            twilio_call_sid=(
+                str(status_update.get("provider_call_id") or "").strip() or None
+                if provider == "twilio"
+                else None
+            ),
+            provider_payload=status_update.get("provider_payload"),
+            failure_reason=str(status_update.get("failure_reason") or "").strip() or None,
+            mark_connected=bool(status_update.get("mark_connected")),
+            mark_ended=bool(status_update.get("mark_ended")),
+        )
+        _logger.info(
+            "contact.call.client-status id=%s session=%s provider=%s status=%s call=%s",
+            ContactCallService._request_id(request),
+            mask_contact_value(call_session_id, head=6, tail=4),
+            provider or "-",
+            str(status_update.get("status") or "failed"),
+            mask_contact_value(str(status_update.get("provider_call_id") or "")),
         )
         return updated or stored_call
