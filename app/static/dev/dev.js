@@ -11,6 +11,7 @@ const faceIndicator = document.getElementById('faceIndicator');
 const faceIndicatorText = document.getElementById('faceIndicatorText');
 const faceCamera = document.getElementById('faceCamera');
 const callPanel = document.getElementById('callPanel');
+const callPanelEyebrow = document.getElementById('callPanelEyebrow');
 const callPanelTitle = document.getElementById('callPanelTitle');
 const callPanelStatus = document.getElementById('callPanelStatus');
 const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
@@ -91,6 +92,7 @@ let currentCallBackendStatus = 'idle';
 let isStartingTwoWayCall = false;
 let twilioDevice = null;
 let pendingCallAction = null;
+let pendingFollowUp = null;
 let callStatusPollTimer = null;
 let callStartTimeout = null;
 const DEBUG_REFRESH_MS = 180;
@@ -1131,28 +1133,32 @@ function setCallPanelVisible(visible) {
   callPanel.hidden = !visible;
 }
 
-function setCallPanelState(mode, title, status) {
-  if (!callPanel || !callPanelTitle || !callPanelStatus) return;
+function setCallPanelState(mode, title, status, eyebrow = 'Panduan resepsionis') {
+  if (!callPanel || !callPanelTitle || !callPanelStatus || !callPanelEyebrow) return;
 
   setCallPanelVisible(true);
-  callPanel.classList.remove('is-active', 'is-connected', 'is-failed');
+  callPanel.classList.remove('is-active', 'is-connected', 'is-failed', 'is-prompt');
   if (mode === 'active') {
     callPanel.classList.add('is-active');
   } else if (mode === 'connected') {
     callPanel.classList.add('is-active', 'is-connected');
   } else if (mode === 'failed') {
     callPanel.classList.add('is-active', 'is-failed');
+  } else if (mode === 'prompt') {
+    callPanel.classList.add('is-prompt');
   }
 
+  callPanelEyebrow.textContent = eyebrow;
   callPanelTitle.textContent = title;
   callPanelStatus.textContent = status;
 }
 
 function resetCallPanel() {
-  if (!callPanel || !callPanelTitle || !callPanelStatus) return;
-  callPanel.classList.remove('is-active', 'is-connected', 'is-failed');
+  if (!callPanel || !callPanelTitle || !callPanelStatus || !callPanelEyebrow) return;
+  callPanel.classList.remove('is-active', 'is-connected', 'is-failed', 'is-prompt');
+  callPanelEyebrow.textContent = 'Panduan resepsionis';
   callPanelTitle.textContent = 'Belum ada sambungan aktif';
-  callPanelStatus.textContent = 'Saat pengunjung setuju untuk dihubungkan, status sambungan akan muncul di sini sebagai informasi pasif.';
+  callPanelStatus.textContent = 'Panduan singkat dan status sambungan akan tampil di sini saat diperlukan.';
   setCallPanelVisible(false);
 }
 
@@ -1171,6 +1177,26 @@ function buildCallStatusText(status) {
   if (normalized === 'failed') return 'Tidak terhubung';
   if (normalized === 'completed') return 'Panggilan selesai';
   return 'Menyiapkan sambungan';
+}
+
+function showPromptOverlay(followUp) {
+  if (!followUp || currentCallSession) return;
+
+  const eyebrow = String(followUp.eyebrow || 'Panduan resepsionis').trim() || 'Panduan resepsionis';
+  const title = String(followUp.title || '').trim();
+  const message = String(followUp.message || '').trim();
+  if (!title && !message) return;
+
+  setCallPanelState(
+    'prompt',
+    title || 'Panduan resepsionis',
+    message || 'Silakan lanjutkan dengan jawaban Anda.',
+    eyebrow
+  );
+}
+
+function setCallStatusPanelState(mode, title, status) {
+  setCallPanelState(mode, title, status, 'Sambungan resepsionis');
 }
 
 async function reportCallFailure(callSessionId, status = 'failed', reason = 'client_error') {
@@ -1294,21 +1320,22 @@ function finishActiveCall({ mode, title, detail }) {
   stopCallStatusPolling();
   stopCallStartTimeout();
   const fallbackAnswer = String(currentCallSession?.fallbackAnswer || '').trim();
+  const fallbackFollowUp = currentCallSession?.fallbackFollowUp || null;
 
   if (mode === 'connected') {
-    setCallPanelState('connected', title, detail);
+    setCallStatusPanelState('connected', title, detail);
     updateMicState();
     return;
   }
 
   if (mode === 'failed') {
-    setCallPanelState('failed', title, detail);
+    setCallStatusPanelState('failed', title, detail);
     applyFallbackAfterCall();
     if (fallbackAnswer) {
       showCallFallbackMessage(fallbackAnswer);
     }
   } else {
-    setCallPanelState('idle', title, detail);
+    setCallStatusPanelState('idle', title, detail);
     contactFlowState = { stage: 'idle' };
   }
 
@@ -1317,6 +1344,9 @@ function finishActiveCall({ mode, title, detail }) {
   currentCallConnected = false;
   currentCallBackendStatus = 'idle';
   resetCallPanel();
+  if (mode === 'failed') {
+    showPromptOverlay(fallbackFollowUp);
+  }
   updateMicState();
 }
 
@@ -1325,7 +1355,7 @@ function wireTwilioCallEvents(connection) {
 
   connection.on('ringing', () => {
     if (!currentCallSession) return;
-    setCallPanelState(
+    setCallStatusPanelState(
       'active',
       buildCallPanelTitle(currentCallSession),
       buildCallStatusText('ringing')
@@ -1336,7 +1366,7 @@ function wireTwilioCallEvents(connection) {
     if (!currentCallSession) return;
     currentCallConnected = true;
     stopCallStartTimeout();
-    setCallPanelState(
+    setCallStatusPanelState(
       'connected',
       buildCallPanelTitle(currentCallSession),
       buildCallStatusText('connected')
@@ -1426,14 +1456,14 @@ function applyPolledCallStatus(callRecord) {
     if (status !== 'preparing') {
       stopCallStartTimeout();
     }
-    setCallPanelState('active', title, buildCallStatusText(status));
+    setCallStatusPanelState('active', title, buildCallStatusText(status));
     return;
   }
 
   if (status === 'connected') {
     currentCallConnected = true;
     stopCallStartTimeout();
-    setCallPanelState('connected', title, buildCallStatusText(status));
+    setCallStatusPanelState('connected', title, buildCallStatusText(status));
     updateMicState();
     return;
   }
@@ -1495,6 +1525,7 @@ async function startTwoWayCall(callAction) {
     ...callAction,
     fallbackFlowState: callAction.fallback_flow_state || null,
     fallbackAnswer: callAction.fallback_answer || '',
+    fallbackFollowUp: callAction.fallback_follow_up || null,
   };
   currentCallConnection = null;
   currentCallConnected = false;
@@ -1503,7 +1534,7 @@ async function startTwoWayCall(callAction) {
 
   suspendAudioForCall();
   activateConversationLayout();
-  setCallPanelState(
+  setCallStatusPanelState(
     'active',
     buildCallPanelTitle(callAction),
     buildCallStatusText('preparing')
@@ -1677,6 +1708,9 @@ async function sendMessage(messageOverride = '') {
   if (!message) return;
 
   clearChat();
+  if (!currentCallSession) {
+    resetCallPanel();
+  }
   if (input) {
     input.value = '';
   }
@@ -1694,6 +1728,7 @@ async function sendMessage(messageOverride = '') {
   let finalAnswer = '';
   let streamEventError = '';
   pendingCallAction = null;
+  pendingFollowUp = null;
 
   const startTime = performance.now();
   let firstTokenTime = null;
@@ -1751,6 +1786,8 @@ async function sendMessage(messageOverride = '') {
           if (event.value && event.value.type === 'start_two_way_call') {
             pendingCallAction = event.value;
           }
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value || null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
@@ -1801,6 +1838,8 @@ async function sendMessage(messageOverride = '') {
           if (event.value && event.value.type === 'start_two_way_call') {
             pendingCallAction = event.value;
           }
+        } else if (event.type === 'follow_up') {
+          pendingFollowUp = event.value || null;
         } else if (event.type === 'citations') {
           console.debug('Sumber RAG:', event.value || []);
         }
@@ -1851,6 +1890,10 @@ async function sendMessage(messageOverride = '') {
 
     if (pendingCallAction) {
       await startTwoWayCall(pendingCallAction);
+    } else if (pendingFollowUp) {
+      showPromptOverlay(pendingFollowUp);
+    } else if (!currentCallSession) {
+      resetCallPanel();
     }
   } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());

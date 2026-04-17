@@ -393,37 +393,82 @@ def _build_call_unavailable_message_answer(selected: dict) -> str:
     )
 
 
-def _build_follow_up_choices(stage: str, options: list[dict[str, str]]) -> dict[str, Any]:
+def _build_follow_up_prompt(
+    stage: str,
+    *,
+    eyebrow: str,
+    title: str,
+    message: str,
+    tone: str = "prompt",
+) -> dict[str, Any]:
     return {
-        "type": "choices",
+        "type": "prompt",
         "stage": stage,
-        "options": options,
+        "eyebrow": eyebrow,
+        "title": title,
+        "message": message,
+        "tone": tone,
     }
 
 
-def _build_confirmation_follow_up() -> dict[str, Any]:
-    return _build_follow_up_choices(
+def _build_confirmation_follow_up(selected: dict, target_kind: str = "person", department: str = "") -> dict[str, Any]:
+    if target_kind == "department" and department:
+        target_label = f"tim {department}"
+    else:
+        target_label = _format_employee_contact_target(selected) if isinstance(selected, dict) else "karyawan terkait"
+
+    return _build_follow_up_prompt(
         "await_confirmation",
-        [
-            {"id": "confirm_yes", "label": "Ya, lanjutkan", "value": "ya"},
-            {"id": "confirm_no", "label": "Tidak", "value": "tidak"},
-        ],
+        eyebrow="Konfirmasi",
+        title=f"Siap menghubungi {target_label}",
+        message="Silakan jawab ya untuk melanjutkan atau tidak untuk membatalkan.",
+        tone="prompt",
     )
 
 
 def _build_disambiguation_follow_up(candidates: list[dict]) -> dict[str, Any]:
-    options: list[dict[str, str]] = []
-    for index, candidate in enumerate(candidates[:5], start=1):
-        if not isinstance(candidate, dict) or not candidate.get("nama"):
-            continue
-        options.append(
-            {
-                "id": f"candidate_{candidate.get('id') or index}",
-                "label": _format_employee_option_label(candidate),
-                "value": str(index),
-            }
-        )
-    return _build_follow_up_choices("await_disambiguation", options)
+    labels = [
+        _format_employee_option_label(candidate)
+        for candidate in candidates[:3]
+        if isinstance(candidate, dict) and candidate.get("nama")
+    ]
+    if not labels:
+        message = "Silakan sebutkan nama lengkap atau divisi yang dimaksud."
+    elif len(labels) == 1:
+        message = f"Silakan pastikan apakah yang dimaksud adalah {labels[0]}."
+    elif len(labels) == 2:
+        message = f"Sebutkan dengan lebih spesifik: {labels[0]} atau {labels[1]}."
+    else:
+        message = f"Sebutkan dengan lebih spesifik: {labels[0]}, {labels[1]}, atau {labels[2]}."
+    return _build_follow_up_prompt(
+        "await_disambiguation",
+        eyebrow="Perlu diperjelas",
+        title="Nama masih ambigu",
+        message=message,
+        tone="prompt",
+    )
+
+
+def _build_message_name_follow_up(selected: dict) -> dict[str, Any]:
+    employee_name = str((selected or {}).get("nama") or "karyawan").strip()
+    return _build_follow_up_prompt(
+        "await_message_name",
+        eyebrow="Tinggalkan pesan",
+        title=f"Nama Anda diperlukan untuk pesan ke {employee_name}",
+        message="Silakan sebutkan nama Anda terlebih dahulu agar pesan bisa dicatat.",
+        tone="prompt",
+    )
+
+
+def _build_message_goal_follow_up(selected: dict) -> dict[str, Any]:
+    employee_name = str((selected or {}).get("nama") or "karyawan").strip()
+    return _build_follow_up_prompt(
+        "await_message_goal",
+        eyebrow="Tinggalkan pesan",
+        title=f"Sampaikan keperluan Anda untuk {employee_name}",
+        message="Silakan jelaskan tujuan atau keperluan Anda dengan singkat dan jelas.",
+        tone="prompt",
+    )
 
 
 def _build_contact_request_success_answer(selected: dict, action_result: dict[str, Any]) -> str:
@@ -605,7 +650,7 @@ def _handle_stage_disambiguation(ctx: dict) -> dict:
                 answer=answer,
                 conversation_id=conversation_id,
                 flow_state=_build_stage("await_confirmation", flow_context, action=action, selected=selected),
-                follow_up=_build_confirmation_follow_up(),
+                follow_up=_build_confirmation_follow_up(selected, target_kind="person"),
             )
 
         answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa kandidat yang mirip.")
@@ -623,7 +668,7 @@ def _handle_stage_disambiguation(ctx: dict) -> dict:
         answer=answer,
         conversation_id=conversation_id,
         flow_state=_build_stage("await_confirmation", flow_context, action=action, selected=selected),
-        follow_up=_build_confirmation_follow_up(),
+        follow_up=_build_confirmation_follow_up(selected, target_kind="person"),
     )
 
 
@@ -669,7 +714,10 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
                             target_kind="person",
                             candidates=remaining_candidates,
                         ),
-                        follow_up=_build_confirmation_follow_up(),
+                        follow_up=_build_confirmation_follow_up(
+                            fallback_selected,
+                            target_kind="person",
+                        ),
                     )
 
                 answer = _build_disambiguation_prompt(remaining_candidates, "Baik, saya carikan kandidat lain yang paling mirip.")
@@ -695,7 +743,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_confirmation", flow_context, action=action, selected=selected, target_kind=target_kind, department=department, candidates=candidates),
-            follow_up=_build_confirmation_follow_up(),
+            follow_up=_build_confirmation_follow_up(selected, target_kind=target_kind, department=department),
         )
 
     try:
@@ -716,6 +764,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
             department=department,
         )
         action_result["fallback_answer"] = _build_call_unavailable_message_answer(selected)
+        action_result["fallback_follow_up"] = _build_message_name_follow_up(selected)
 
     request_status = str(action_result.get("status") or "").strip().lower()
 
@@ -736,6 +785,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
                 target_kind=target_kind,
                 department=department,
             ),
+            follow_up=_build_message_name_follow_up(selected),
             action_result=action_result,
         )
 
@@ -753,6 +803,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
                 target_kind=target_kind,
                 department=department,
             ),
+            follow_up=_build_message_name_follow_up(selected),
         )
 
     if _is_successful_contact_status(request_status):
@@ -795,6 +846,7 @@ def _handle_stage_message_name(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_message_name", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
+            follow_up=_build_message_name_follow_up(selected),
         )
 
     answer = f"Terima kasih, {visitor_name}. Sekarang mohon sampaikan tujuan atau keperluan Anda."
@@ -803,6 +855,7 @@ def _handle_stage_message_name(ctx: dict) -> dict:
         answer=answer,
         conversation_id=conversation_id,
         flow_state=_build_stage("await_message_goal", flow_context, action=action, selected=selected, target_kind=target_kind, department=department, visitor_name=visitor_name),
+        follow_up=_build_message_goal_follow_up(selected),
     )
 
 
@@ -826,6 +879,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_message_name", flow_context, action=action, selected=selected, target_kind=target_kind, department=department),
+            follow_up=_build_message_name_follow_up(selected),
         )
 
     visitor_goal = extract_visitor_goal(user_message, safe_flow_state)
@@ -836,6 +890,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_message_goal", flow_context, action=action, selected=selected, target_kind=target_kind, department=department, visitor_name=visitor_name),
+            follow_up=_build_message_goal_follow_up(selected),
         )
 
     stored_message: dict[str, Any] | None = None
@@ -949,7 +1004,7 @@ def _handle_stage_entry(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_confirmation", flow_context, action=action, target_kind="department", department=department_target, selected=selected, candidates=dept_matches[:5]),
-            follow_up=_build_confirmation_follow_up(),
+            follow_up=_build_confirmation_follow_up(selected, target_kind="department", department=department_target),
         )
 
     if semantic_target_type == "person" and semantic_target_value:
@@ -976,7 +1031,7 @@ def _handle_stage_entry(ctx: dict) -> dict:
             answer=answer,
             conversation_id=conversation_id,
             flow_state=_build_stage("await_confirmation", flow_context, action=action, selected=selected, target_kind="person"),
-            follow_up=_build_confirmation_follow_up(),
+            follow_up=_build_confirmation_follow_up(selected, target_kind="person"),
         )
 
     candidates = matches

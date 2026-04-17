@@ -329,6 +329,14 @@ input {
     0 0 0 1px rgba(255, 178, 140, 0.12);
 }
 
+.dev-call-panel.is-prompt {
+  border-color: rgba(246, 220, 159, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 22px 46px rgba(6, 17, 26, 0.24),
+    0 0 0 1px rgba(246, 220, 159, 0.12);
+}
+
 .dev-call-panel__eyebrow {
   position: relative;
   display: inline-flex;
