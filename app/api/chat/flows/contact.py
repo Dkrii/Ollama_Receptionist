@@ -598,6 +598,27 @@ def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any
     return result
 
 
+def _build_contact_message_text(employee: dict[str, Any], visitor_name: str, visitor_goal: str) -> str:
+    employee_name = str(employee.get("nama") or "Bapak/Ibu").strip() or "Bapak/Ibu"
+    department = str(employee.get("departemen") or "").strip()
+
+    lines = [
+        "Notifikasi Virtual Receptionist",
+        f"Halo {employee_name}, ada tamu yang ingin menghubungi Anda.",
+        f"Nama Tamu: {visitor_name}",
+    ]
+    if department:
+        lines.append(f"Departemen: {department}")
+    lines.extend(
+        [
+            f"Keperluan: {visitor_goal}",
+            "Mohon tindak lanjut saat Anda tersedia.",
+            "Terima kasih.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 # --- Handler helpers ---
 
 def _unpack_ctx(ctx: dict) -> tuple:
@@ -895,9 +916,10 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         )
 
     stored_message: dict[str, Any] | None = None
+    dispatch_result: dict[str, Any] | None = None
     initial_message_provider = _initial_message_delivery_provider()
+    message_content = _build_contact_message_text(selected, visitor_name, visitor_goal)
     try:
-        message_content = f"Nama: {visitor_name}; Tujuan: {visitor_goal}"
         stored_message = AdminRepository.create_contact_message(
             employee_id=int(selected["id"]),
             employee_nama=str(selected["nama"]),
@@ -911,6 +933,13 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             delivery_detail="Menunggu dispatcher WhatsApp.",
             delivery_provider=initial_message_provider,
         )
+    except Exception:
+        _logger.exception("chat.contact message record create failed")
+        answer = "Maaf, pesan belum berhasil diproses. Silakan menuju front office untuk bantuan offline."
+        store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
+
+    try:
         dispatch_result = dispatch_contact_message(
             employee=selected,
             visitor_name=visitor_name,
@@ -918,6 +947,27 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             message_text=message_content,
             message_id=int(stored_message["id"]),
         )
+    except Exception as exc:
+        _logger.exception("chat.contact message dispatch failed")
+        try:
+            AdminRepository.update_contact_message_delivery(
+                message_id=int(stored_message["id"]),
+                delivery_status="failed",
+                delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
+                delivery_provider=initial_message_provider,
+                provider_payload={
+                    "error": "dispatch_failed",
+                    "detail": str(exc),
+                },
+                mark_sent=False,
+            )
+        except Exception:
+            _logger.exception("chat.contact message failure update failed")
+        answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
+        store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
+
+    try:
         delivered_payload = AdminRepository.update_contact_message_delivery(
             message_id=int(stored_message["id"]),
             delivery_status=str(dispatch_result.get("status") or "sent"),
@@ -928,22 +978,15 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"sent", "sent_dummy"},
         )
     except Exception:
-        _logger.exception("chat.contact message dispatch failed")
-        if stored_message and stored_message.get("id"):
-            try:
-                AdminRepository.update_contact_message_delivery(
-                    message_id=int(stored_message["id"]),
-                    delivery_status="failed",
-                    delivery_detail="Dispatcher WhatsApp gagal dijalankan.",
-                    delivery_provider=initial_message_provider,
-                    provider_payload={"error": "dispatch_failed"},
-                    mark_sent=False,
-                )
-            except Exception:
-                _logger.exception("chat.contact message failure update failed")
-        answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
+        _logger.exception("chat.contact message delivery update failed")
+        delivered_payload = {
+            **(stored_message or {}),
+            "delivery_status": str(dispatch_result.get("status") or "queued"),
+            "delivery_detail": str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
+            "delivery_provider": str(dispatch_result.get("provider") or initial_message_provider),
+            "provider_message_id": str(dispatch_result.get("provider_message_id") or ""),
+            "provider_payload": dispatch_result.get("provider_payload"),
+        }
 
     delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
     if delivery_status in {"queued", "queued_dummy"}:
@@ -1092,10 +1135,7 @@ def _should_detect_contact_intent(
     if not is_active_stage:
         return True
 
-    active_stage_allows_new_target = (
-        _classify_confirmation_reply(user_message) == "unknown"
-        and _classify_unavailable_choice_rule_based(user_message) == "unknown"
-    )
+    active_stage_allows_new_target = _classify_confirmation_reply(user_message) == "unknown"
     return active_stage_allows_new_target
 
 

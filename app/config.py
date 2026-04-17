@@ -68,6 +68,7 @@ class Settings(BaseModel):
     wablas_token: str = os.getenv("WABLAS_TOKEN", "").strip()
     wablas_secret_key: str = os.getenv("WABLAS_SECRET_KEY", "").strip()
     wablas_timeout_seconds: int = int(os.getenv("WABLAS_TIMEOUT_SECONDS", "15"))
+    wablas_test_group_id: str = os.getenv("WABLAS_TEST_GROUP_ID", "").strip()
 
 
 settings = Settings()
