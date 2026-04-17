@@ -217,6 +217,16 @@ input {
   pointer-events: none;
 }
 
+.kiosk-avatar--3d {
+  height: min(90vh, 820px);
+}
+
+.kiosk-avatar-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .kiosk-camera {
   position: absolute;
   width: 1px;
