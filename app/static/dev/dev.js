@@ -1,6 +1,3 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
 const kioskRoot = document.getElementById('kioskRoot');
 const chatBox = document.getElementById('chatBox');
 const input = document.getElementById('messageInput');
@@ -35,22 +32,7 @@ const VAD_SILENCE_END_MS = 900;
 const STT_MIN_FINAL_CHARS = 3;
 const VISION_CDN_VERSION = '0.10.14';
 const FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
-const AVATAR_MODEL_URL = '/static/kiosk/models/Animasi-Akebono.glb';
-const AVATAR_VIEW = {
-  cameraFov: 40,
-  cameraPosition: { x: 0, y: 1.0, z: 5.5 },
-  modelPosition: { x: 0, y: -0.95, z: 0 },
-  modelScale: 2.2
-};
-const AVATAR_ARM_POSE = {
-  upperArmDownDeg: 62,
-  foreArmDownDeg: 14
-};
-const BONE_AXIS_VECTORS = {
-  x: new THREE.Vector3(1, 0, 0),
-  y: new THREE.Vector3(0, 1, 0),
-  z: new THREE.Vector3(0, 0, 1)
-};
+
 
 let currentAvatarState = 'IDLE';
 let avatarScene = null;
@@ -1090,7 +1072,7 @@ function initAvatar3D() {
 }
 
 function preloadAvatarStates() {
-  initAvatar3D();
+  setAvatarState('IDLE');
 }
 
 function setAvatarState(state) {

@@ -8,14 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/dev/dev.css?v=20260408-8" />
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-      }
-    }
-  </script>
+
   <link rel="stylesheet" href="/static/dev/dev.css?v=20260416-4" />
 </head>
 <body>
@@ -39,7 +32,12 @@
     <section class="kiosk-stage" aria-hidden="true">
       <div class="kiosk-stage__halo"></div>
       <div class="kiosk-stage__floor"></div>
-      <div id="kioskAvatar" class="kiosk-avatar kiosk-avatar--3d" role="img" aria-label="Virtual Receptionist"></div>
+      <div id="kioskAvatar" class="kiosk-avatar" role="img" aria-label="Virtual Receptionist" data-state="IDLE">
+        <img src="/static/dev/models/IDLE5.png" class="avatar-img" data-state-id="IDLE" alt="idle" />
+        <img src="/static/dev/models/LISTENING5.png" class="avatar-img" data-state-id="LISTENING" alt="listening" />
+        <img src="/static/dev/models/THINKING5.png" class="avatar-img" data-state-id="THINGKING" alt="thinking" />
+        <img src="/static/dev/models/TALKING5.png" class="avatar-img" data-state-id="TALKING" alt="talking" />
+      </div>
       <video id="faceCamera" class="kiosk-camera" autoplay muted playsinline></video>
     </section>
 

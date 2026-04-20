@@ -16,10 +16,6 @@ router = APIRouter(tags=["web"])
 def index(request: Request):
     return templates.TemplateResponse(WebPageService.home_template(), {"request": request})
 
-@router.get("/dev", response_class=HTMLResponse)
-def dev(request: Request):
-    return templates.TemplateResponse(WebPageService.dev_template(), {"request": request})
-
 
 @router.get("/admin", response_class=HTMLResponse)
 def admin(request: Request):
