@@ -69,7 +69,7 @@ def _extract_provider_message_id(provider_payload: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_status(provider_payload: dict[str, Any]) -> str:
+def _collect_message_statuses(provider_payload: dict[str, Any]) -> list[str]:
     data = provider_payload.get("data")
     candidate_statuses: list[str] = []
     if isinstance(data, dict):
@@ -93,12 +93,29 @@ def _extract_status(provider_payload: dict[str, Any]) -> str:
                     for item in messages:
                         if isinstance(item, dict):
                             candidate_statuses.append(str(item.get("status") or "").strip().lower())
+    return candidate_statuses
 
+
+def _provider_acknowledged(provider_payload: dict[str, Any]) -> bool:
+    return provider_payload.get("status") is True and bool(_extract_provider_message_id(provider_payload))
+
+
+def _extract_status(provider_payload: dict[str, Any]) -> str:
+    candidate_statuses = _collect_message_statuses(provider_payload)
+
+    for status in candidate_statuses:
+        if status in {"failed", "error", "cancelled", "rejected"}:
+            return "failed"
     for status in candidate_statuses:
         if status in {"sent", "delivered", "read"}:
             return "sent"
+    for status in candidate_statuses:
         if status in {"pending", "queue", "queued"}:
+            if _provider_acknowledged(provider_payload):
+                return "accepted"
             return "queued"
+    if _provider_acknowledged(provider_payload):
+        return "accepted"
     if provider_payload.get("status") is True:
         return "sent"
     return "queued"
@@ -141,9 +158,9 @@ def dispatch_message(
     missing_settings = missing_wablas_settings()
     if missing_settings:
         return {
-            "provider": "dummy",
-            "status": "sent_dummy",
-            "detail": "Dummy messaging dispatcher aktif karena konfigurasi provider belum lengkap.",
+            "provider": MESSAGING_PROVIDER_WABLAS,
+            "status": "failed",
+            "detail": "Konfigurasi provider Wablas belum lengkap.",
             "provider_message_id": "",
             "provider_payload": {
                 "configured": False,
@@ -218,6 +235,10 @@ def dispatch_message(
         if use_group_target and dispatch_status == "sent"
         else "Pesan WhatsApp berhasil diteruskan ke karyawan."
         if dispatch_status == "sent"
+        else "Pesan WhatsApp sudah diterima Wablas untuk grup testing dan sedang diproses."
+        if use_group_target and dispatch_status == "accepted"
+        else "Pesan WhatsApp sudah diterima Wablas dan sedang diproses."
+        if dispatch_status == "accepted"
         else "Pesan WhatsApp diterima provider dan sedang diproses untuk grup testing Wablas."
         if use_group_target
         else "Pesan WhatsApp diterima provider dan sedang diproses."

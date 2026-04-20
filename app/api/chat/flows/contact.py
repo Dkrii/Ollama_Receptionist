@@ -19,8 +19,6 @@ from api.chat.utils import normalize_text, store_chat_message
 from config import settings
 from lib.contact import (
     dispatch_contact_message,
-    get_active_messaging_provider,
-    is_contact_messaging_configured,
 )
 from rag.employee_directory import load_employee_directory
 
@@ -496,7 +494,7 @@ def _is_unavailable_contact_status(status: str) -> bool:
 
 
 def _is_successful_contact_status(status: str) -> bool:
-    return status in {"preparing", "dialing_employee", "queued", "ringing", "connected", "sent", "sent_dummy"}
+    return status in {"preparing", "dialing_employee", "queued", "ringing", "connected", "accepted", "sent"}
 
 
 def _build_contact_response(
@@ -586,10 +584,6 @@ def _start_contact_request(employee: dict, action: str) -> dict[str, Any]:
         },
         "detail": "Permintaan kontak diterima dan sistem sedang mengecek ketersediaan karyawan.",
     }
-
-
-def _initial_message_delivery_provider() -> str:
-    return get_active_messaging_provider() if is_contact_messaging_configured() else "dummy"
 
 
 def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any]:
@@ -917,7 +911,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
 
     stored_message: dict[str, Any] | None = None
     dispatch_result: dict[str, Any] | None = None
-    initial_message_provider = _initial_message_delivery_provider()
+    initial_message_provider = str(getattr(settings, "contact_messaging_provider", "") or "wablas").strip().lower() or "wablas"
     message_content = _build_contact_message_text(selected, visitor_name, visitor_goal)
     try:
         stored_message = AdminRepository.create_contact_message(
@@ -972,10 +966,10 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             message_id=int(stored_message["id"]),
             delivery_status=str(dispatch_result.get("status") or "sent"),
             delivery_detail=str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
-            delivery_provider=str(dispatch_result.get("provider") or "dummy"),
+            delivery_provider=str(dispatch_result.get("provider") or initial_message_provider),
             provider_message_id=str(dispatch_result.get("provider_message_id") or ""),
             provider_payload=dispatch_result.get("provider_payload"),
-            mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"sent", "sent_dummy"},
+            mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"accepted", "sent"},
         )
     except Exception:
         _logger.exception("chat.contact message delivery update failed")
@@ -989,7 +983,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         }
 
     delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
-    if delivery_status in {"queued", "queued_dummy"}:
+    if delivery_status == "queued":
         answer = (
             f"Baik, pesan Anda untuk {selected['nama']} sudah dicatat dan sedang diproses. "
             "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
@@ -1007,7 +1001,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         action_result={
             "type": "notify",
             "status": str((delivered_payload or {}).get("delivery_status") or "sent"),
-            "provider": str((delivered_payload or {}).get("delivery_provider") or "dummy"),
+            "provider": str((delivered_payload or {}).get("delivery_provider") or initial_message_provider),
             "employee": {
                 "id": selected["id"],
                 "nama": selected["nama"],

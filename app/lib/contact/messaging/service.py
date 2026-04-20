@@ -6,16 +6,6 @@ from lib.contact.shared.registry import (
 )
 
 
-def get_active_messaging_provider() -> str:
-    return get_contact_messaging_provider()
-
-
-def is_contact_messaging_configured() -> bool:
-    provider = get_contact_messaging_provider()
-    adapter = get_contact_messaging_provider_adapter(provider)
-    return bool(adapter and adapter.is_configured())
-
-
 def dispatch_contact_message(
     *,
     employee: dict,

@@ -40,7 +40,7 @@ class AdminRepository:
                 channel TEXT NOT NULL,
                 delivery_status TEXT NOT NULL,
                 delivery_detail TEXT NOT NULL,
-                delivery_provider TEXT NOT NULL DEFAULT 'dummy',
+                delivery_provider TEXT NOT NULL,
                 provider_message_id TEXT,
                 provider_payload TEXT,
                 created_at TEXT NOT NULL,
@@ -155,7 +155,7 @@ class AdminRepository:
         existing_columns = {str(row["name"]) for row in rows}
 
         required_columns = {
-            "delivery_provider": "TEXT NOT NULL DEFAULT 'dummy'",
+            "delivery_provider": "TEXT",
             "provider_message_id": "TEXT",
             "provider_payload": "TEXT",
         }
@@ -374,7 +374,7 @@ class AdminRepository:
         channel: str,
         delivery_status: str,
         delivery_detail: str,
-        delivery_provider: str = "dummy",
+        delivery_provider: str,
         provider_message_id: str | None = None,
         provider_payload: dict[str, Any] | list[Any] | str | None = None,
     ) -> dict:
@@ -641,18 +641,6 @@ class AdminRepository:
     def get_contact_call_by_session_id(call_session_id: str) -> dict | None:
         with closing(AdminRepository._connect()) as connection, connection:
             return AdminRepository._fetch_contact_call_by_session_id(connection, call_session_id)
-
-    @staticmethod
-    def mark_contact_message_sent_dummy(*, message_id: int, delivery_detail: str) -> dict | None:
-        return AdminRepository.update_contact_message_delivery(
-            message_id=message_id,
-            delivery_status="sent_dummy",
-            delivery_detail=delivery_detail,
-            delivery_provider="dummy",
-            provider_message_id="",
-            provider_payload={"mode": "dummy"},
-            mark_sent=True,
-        )
 
     @staticmethod
     def list_contact_messages(limit: int = 50) -> list[dict]:
