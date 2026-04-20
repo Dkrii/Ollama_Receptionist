@@ -85,7 +85,7 @@ def ask_stream(
             yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
 
             if _should_fallback_to_unknown(retrieval):
-                fallback_answer = "Maaf, saya belum menemukan informasi pastinya di knowledge yang tersedia."
+                fallback_answer = "Maaf, saya belum punya informasi pastinya untuk itu. Apakah ada hal lain yang ingin Anda tanyakan?"
                 store_chat_message(conversation_id, "assistant", fallback_answer)
                 yield json.dumps({"type": "token", "value": fallback_answer}, ensure_ascii=False) + "\n"
                 yield json.dumps({"type": "citations", "value": retrieval["citations"]}, ensure_ascii=False) + "\n"

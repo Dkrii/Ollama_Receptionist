@@ -4,6 +4,12 @@
   --glass-border: rgba(255, 255, 255, 0.24);
   --glass-fill: rgba(186, 200, 214, 0.14);
   --glass-shadow: 0 24px 60px rgba(5, 16, 26, 0.26);
+  --stage-top-pad: clamp(28px, 4dvh, 44px);
+  --stage-bottom-pad: clamp(56px, 8dvh, 88px);
+  --avatar-height: clamp(600px, 88dvh, 880px);
+  --avatar-width: min(54vw, calc(var(--avatar-height) * 0.66));
+  --avatar-shift-with-chat: -10vw;
+  --avatar-scale-with-chat: 1.06;
 }
 
 * {
@@ -32,6 +38,9 @@ input {
   position: relative;
   width: 100vw;
   min-height: 100vh;
+  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   isolation: isolate;
 }
@@ -176,7 +185,7 @@ input {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 4vh 0 8vh;
+  padding: var(--stage-top-pad) 0 var(--stage-bottom-pad);
   transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -204,25 +213,36 @@ input {
 
 .kiosk-avatar {
   position: relative;
-  width: min(54vw, 820px);
-  max-height: 90vh;
-  object-fit: contain;
-  object-position: center bottom;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: var(--avatar-width);
+  height: var(--avatar-height);
   transform-origin: center bottom;
   filter:
     drop-shadow(0 24px 40px rgba(7, 17, 28, 0.24))
     drop-shadow(0 0 16px rgba(172, 194, 255, 0.08));
-  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    transform 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.7s cubic-bezier(0.22, 1, 0.36, 1);
   user-select: none;
   pointer-events: none;
 }
 
 .avatar-img {
   display: none;
-  height: min(90vh, 820px);
-  max-width: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  object-position: center bottom;
   margin: 0 auto;
+}
+
+.kiosk-avatar-canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
 }
 
 .kiosk-avatar[data-state="IDLE"] .avatar-img[data-state-id="IDLE"],
@@ -628,11 +648,11 @@ input {
 }
 
 .has-conversation .kiosk-stage {
-  transform: translateX(-12vw);
+  transform: translateX(var(--avatar-shift-with-chat));
 }
 
 .has-conversation .kiosk-avatar {
-  transform: translateY(2px) scale(1.1);
+  transform: translateY(2px) scale(var(--avatar-scale-with-chat));
 }
 
 .has-conversation .kiosk-chat-tray {
@@ -666,14 +686,15 @@ input {
 }
 
 @media (max-width: 1180px) {
+  :root {
+    --avatar-height: clamp(560px, 86dvh, 840px);
+    --avatar-width: min(60vw, calc(var(--avatar-height) * 0.66));
+    --avatar-shift-with-chat: -6vw;
+  }
+
   .kiosk-stage {
     justify-content: center;
     padding-bottom: 16vh;
-  }
-
-  .kiosk-avatar {
-    width: min(66vw, 620px);
-    max-height: 72vh;
   }
 
   .kiosk-chat-tray {
@@ -704,13 +725,18 @@ input {
     width: min(calc(100vw - 32px), 760px);
     bottom: 18px;
   }
-
-  .has-conversation .kiosk-stage {
-    transform: translateX(-6vw);
-  }
 }
 
 @media (max-width: 720px) {
+  :root {
+    --stage-top-pad: clamp(18px, 3dvh, 28px);
+    --stage-bottom-pad: clamp(72px, 12dvh, 112px);
+    --avatar-height: clamp(520px, 84dvh, 780px);
+    --avatar-width: min(82vw, calc(var(--avatar-height) * 0.64));
+    --avatar-shift-with-chat: -3vw;
+    --avatar-scale-with-chat: 1.02;
+  }
+
   .kiosk-topbar {
     top: 12px;
     left: 12px;
@@ -742,11 +768,6 @@ input {
 
   .kiosk-stage {
     padding: 8vh 0 16vh;
-  }
-
-  .kiosk-avatar {
-    width: min(78vw, 380px);
-    max-height: 62vh;
   }
 
   .kiosk-chat-tray {
@@ -787,6 +808,31 @@ input {
   .input-container {
     min-height: 54px;
     padding: 0 18px;
+  }
+}
+
+@media (max-height: 920px) {
+  :root {
+    --avatar-height: clamp(560px, 84dvh, 800px);
+  }
+}
+
+@media (max-height: 760px) {
+  :root {
+    --stage-top-pad: clamp(18px, 3dvh, 26px);
+    --stage-bottom-pad: clamp(44px, 7dvh, 64px);
+    --avatar-height: clamp(460px, 78dvh, 680px);
+    --avatar-width: min(60vw, calc(var(--avatar-height) * 0.64));
+    --avatar-scale-with-chat: 1;
+  }
+
+  .kiosk-chat-tray {
+    top: 17vh;
+    bottom: 10vh;
+  }
+
+  .dev-call-panel {
+    top: 12vh;
   }
 }
 

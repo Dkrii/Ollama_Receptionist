@@ -312,7 +312,7 @@ def _build_disambiguation_prompt(candidates: list[dict], prefix: str) -> str:
         if isinstance(item, dict) and item.get("nama")
     ]
     if not candidate_names:
-        return prefix + " Silahkan sebutkan nama lengkap karyawan yang ingin dihubungi."
+        return prefix + " Silakan sebutkan nama lengkap atau divisi yang Anda maksud."
     if len(candidate_names) == 1:
         return prefix + f" Apakah {candidate_names[0]}?"
     if len(candidate_names) == 2:
@@ -372,18 +372,15 @@ def _should_restart_contact_flow(
 
 def _build_cancel_contact_answer(selected: dict | None, target_kind: str, department: str) -> str:
     if target_kind == "department" and department:
-        return (
-            f"Saya sudah membatalkan melanjutkan hubungi ke tim {department}. "
-            "Apakah ada yang bisa saya bantu lagi?"
-        )
+        return f"Baik, saya batalkan permintaan untuk menghubungi tim {department}."
 
     if isinstance(selected, dict) and selected.get("nama") and selected.get("departemen"):
         return (
-            f"Saya sudah membatalkan melanjutkan hubungi ke "
-            f"{selected['nama']} ({selected['departemen']}). Apakah ada yang bisa saya bantu lagi?"
+            f"Baik, saya batalkan dulu permintaan untuk menghubungi "
+            f"{selected['nama']} ({selected['departemen']})."
         )
 
-    return "Saya sudah membatalkan proses hubungi. Apakah ada yang bisa saya bantu lagi?"
+    return "Baik, saya batalkan permintaan kontaknya."
 
 
 def _build_call_unavailable_message_answer(selected: dict) -> str:
@@ -433,17 +430,17 @@ def _build_disambiguation_follow_up(candidates: list[dict]) -> dict[str, Any]:
         if isinstance(candidate, dict) and candidate.get("nama")
     ]
     if not labels:
-        message = "Silakan sebutkan nama lengkap atau divisi yang dimaksud."
+        message = "Silakan sebutkan nama lengkap atau divisi yang Anda maksud."
     elif len(labels) == 1:
-        message = f"Silakan pastikan apakah yang dimaksud adalah {labels[0]}."
+        message = f"Silakan pastikan apakah yang Anda maksud adalah {labels[0]}."
     elif len(labels) == 2:
-        message = f"Sebutkan dengan lebih spesifik: {labels[0]} atau {labels[1]}."
+        message = f"Sebutkan nama yang paling sesuai: {labels[0]} atau {labels[1]}."
     else:
-        message = f"Sebutkan dengan lebih spesifik: {labels[0]}, {labels[1]}, atau {labels[2]}."
+        message = f"Sebutkan nama yang paling sesuai: {labels[0]}, {labels[1]}, atau {labels[2]}."
     return _build_follow_up_prompt(
         "await_disambiguation",
-        eyebrow="Perlu diperjelas",
-        title="Nama masih ambigu",
+        eyebrow="Pilihan kontak",
+        title="Siapa yang Anda maksud?",
         message=message,
         tone="prompt",
     )
@@ -667,6 +664,15 @@ def _handle_stage_disambiguation(ctx: dict) -> dict:
     if not isinstance(candidates, list) or not candidates:
         return _expired_response(conversation_id, flow_context, "Pilihan kandidat sudah kedaluwarsa. Silakan sebutkan lagi siapa karyawan yang ingin dihubungi.")
 
+    if _classify_confirmation_reply(user_message) == "confirm_no":
+        answer = _build_cancel_contact_answer(None, "person", "")
+        store_chat_message(conversation_id, "assistant", answer)
+        return _build_contact_response(
+            answer=answer,
+            conversation_id=conversation_id,
+            flow_state=_build_stage("idle", flow_context),
+        )
+
     selected = _resolve_disambiguation_selection(user_message, candidates)
     if not selected:
         if len(candidates) == 1 and isinstance(candidates[0], dict) and candidates[0].get("id"):
@@ -680,7 +686,7 @@ def _handle_stage_disambiguation(ctx: dict) -> dict:
                 follow_up=_build_confirmation_follow_up(selected, target_kind="person"),
             )
 
-        answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa kandidat yang mirip.")
+        answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mungkin Anda maksud.")
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(
             answer=answer,
@@ -747,7 +753,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
                         ),
                     )
 
-                answer = _build_disambiguation_prompt(remaining_candidates, "Baik, saya carikan kandidat lain yang paling mirip.")
+                answer = _build_disambiguation_prompt(remaining_candidates, "Baik, saya carikan nama lain yang mungkin sesuai.")
                 store_chat_message(conversation_id, "assistant", answer)
                 return _build_contact_response(
                     answer=answer,
@@ -1078,7 +1084,7 @@ def _handle_stage_entry(ctx: dict) -> dict:
         )
 
     candidates = matches
-    answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa kandidat yang mirip.")
+    answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mungkin Anda maksud.")
     store_chat_message(conversation_id, "assistant", answer)
     return _build_contact_response(
         answer=answer,
