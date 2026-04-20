@@ -128,8 +128,8 @@ input {
   background:
     linear-gradient(108deg, rgba(255, 255, 255, 0.06), transparent 28%),
     url('/static/dev/models/v2.jpg') center center / cover no-repeat;
-  filter: blur(12px) saturate(104%) brightness(0.74);
-  transform: scale(1.08);
+  filter: blur(4px) saturate(104%) brightness(0.74);
+  transform: scale(1.04);
 }
 
 .kiosk-bg__overlay {

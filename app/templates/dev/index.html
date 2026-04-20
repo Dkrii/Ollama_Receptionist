@@ -14,7 +14,9 @@
 <body>
   <main id="kioskRoot" class="kiosk-container">
     <header class="kiosk-topbar" aria-label="Status deteksi wajah">
-      <div class="kiosk-logo" aria-label="Akebono">AKEBONO</div>
+      <div class="kiosk-logo" aria-label="Akebono">
+        <img src="/static/dev/models/logo_akebono_nobg.png" alt="AKEBONO" style="height: 50px; object-fit: contain;">
+      </div>
       <div id="faceIndicator" class="kiosk-face-indicator is-searching" role="status" aria-live="polite">
         <span class="kiosk-face-indicator__dot" aria-hidden="true"></span>
         <span id="faceIndicatorText">Mencari wajah...</span>
@@ -51,8 +53,10 @@
       <p id="callPanelStatus" class="dev-call-panel__status">Panduan singkat dan status sambungan akan tampil di sini saat diperlukan.</p>
     </section>
 
+    {% if app_env == 'development' %}
     <section id="debugRuntime" class="kiosk-debug" aria-live="polite" aria-label="Runtime debug info"></section>
     <ul id="debugStats" hidden></ul>
+    {% endif %}
     <audio id="remoteMedia" autoplay></audio>
   </main>
 
