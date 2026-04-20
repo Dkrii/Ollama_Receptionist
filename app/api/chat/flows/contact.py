@@ -312,7 +312,7 @@ def _build_disambiguation_prompt(candidates: list[dict], prefix: str) -> str:
         if isinstance(item, dict) and item.get("nama")
     ]
     if not candidate_names:
-        return prefix + " Silakan sebutkan nama lengkap karyawan yang ingin dihubungi."
+        return prefix + " Silahkan sebutkan nama lengkap karyawan yang ingin dihubungi."
     if len(candidate_names) == 1:
         return prefix + f" Apakah {candidate_names[0]}?"
     if len(candidate_names) == 2:
@@ -594,23 +594,34 @@ def _build_stage(stage: str, flow_context: dict, **kwargs: Any) -> dict[str, Any
 
 def _build_contact_message_text(employee: dict[str, Any], visitor_name: str, visitor_goal: str) -> str:
     employee_name = str(employee.get("nama") or "Bapak/Ibu").strip() or "Bapak/Ibu"
-    department = str(employee.get("departemen") or "").strip()
 
     lines = [
         "Notifikasi Virtual Receptionist",
         f"Halo {employee_name}, ada tamu yang ingin menghubungi Anda.",
         f"Nama Tamu: {visitor_name}",
+        f"Keperluan: {visitor_goal}",
+        "Mohon tindak lanjut saat Anda tersedia.",
+        "Terima kasih.",
     ]
-    if department:
-        lines.append(f"Departemen: {department}")
-    lines.extend(
-        [
-            f"Keperluan: {visitor_goal}",
-            "Mohon tindak lanjut saat Anda tersedia.",
-            "Terima kasih.",
-        ]
-    )
     return "\n".join(lines)
+
+
+def _default_contact_delivery_detail(status: str) -> str:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "sent":
+        return "Pesan sudah terkirim."
+    if normalized_status in {"accepted", "queued"}:
+        return "Pesan sudah diterima sistem dan sedang diproses."
+    return "Pesan belum berhasil dikirim."
+
+
+def _build_notify_delivery_answer(employee_name: str, delivery_status: str) -> str:
+    normalized_status = str(delivery_status or "").strip().lower()
+    if normalized_status == "sent":
+        return f"Baik, pesan Anda untuk {employee_name} sudah terkirim. Mohon tunggu beberapa saat."
+    if normalized_status in {"accepted", "queued"}:
+        return f"Baik, pesan Anda untuk {employee_name} sudah diterima sistem dan sedang diproses. Mohon tunggu beberapa saat."
+    return "Maaf, pesan belum bisa terkirim. Silakan coba lagi beberapa saat."
 
 
 # --- Handler helpers ---
@@ -832,7 +843,7 @@ def _handle_stage_confirmation(ctx: dict) -> dict:
             action_result=action_result,
         )
 
-    answer = "Permintaan hubungi belum berhasil diproses. Silakan coba lagi atau lanjutkan melalui front office."
+    answer = "Permintaan hubungi belum berhasil diproses. Silakan coba lagi beberapa saat."
     store_chat_message(conversation_id, "assistant", answer)
     return _build_contact_response(
         answer=answer,
@@ -929,7 +940,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         )
     except Exception:
         _logger.exception("chat.contact message record create failed")
-        answer = "Maaf, pesan belum berhasil diproses. Silakan menuju front office untuk bantuan offline."
+        answer = "Maaf, pesan belum berhasil diproses. Silakan coba lagi beberapa saat."
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
 
@@ -957,42 +968,35 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
             )
         except Exception:
             _logger.exception("chat.contact message failure update failed")
-        answer = "Maaf, pesan belum berhasil dikirim. Silakan menuju front office untuk bantuan offline."
+        answer = "Maaf, pesan belum berhasil dikirim. Silakan coba lagi beberapa saat."
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
 
     try:
+        dispatch_status = str(dispatch_result.get("status") or "").strip().lower()
         delivered_payload = AdminRepository.update_contact_message_delivery(
             message_id=int(stored_message["id"]),
-            delivery_status=str(dispatch_result.get("status") or "sent"),
-            delivery_detail=str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
+            delivery_status=dispatch_status or "failed",
+            delivery_detail=str(dispatch_result.get("detail") or _default_contact_delivery_detail(dispatch_status)),
             delivery_provider=str(dispatch_result.get("provider") or initial_message_provider),
             provider_message_id=str(dispatch_result.get("provider_message_id") or ""),
             provider_payload=dispatch_result.get("provider_payload"),
-            mark_sent=str(dispatch_result.get("status") or "").strip().lower() in {"accepted", "sent"},
+            mark_sent=dispatch_status in {"accepted", "sent"},
         )
     except Exception:
         _logger.exception("chat.contact message delivery update failed")
+        dispatch_status = str(dispatch_result.get("status") or "").strip().lower()
         delivered_payload = {
             **(stored_message or {}),
-            "delivery_status": str(dispatch_result.get("status") or "queued"),
-            "delivery_detail": str(dispatch_result.get("detail") or "Pesan berhasil diteruskan."),
+            "delivery_status": dispatch_status or "failed",
+            "delivery_detail": str(dispatch_result.get("detail") or _default_contact_delivery_detail(dispatch_status)),
             "delivery_provider": str(dispatch_result.get("provider") or initial_message_provider),
             "provider_message_id": str(dispatch_result.get("provider_message_id") or ""),
             "provider_payload": dispatch_result.get("provider_payload"),
         }
 
     delivery_status = str((delivered_payload or {}).get("delivery_status") or "").strip().lower()
-    if delivery_status == "queued":
-        answer = (
-            f"Baik, pesan Anda untuk {selected['nama']} sudah dicatat dan sedang diproses. "
-            "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
-        )
-    else:
-        answer = (
-            f"Baik, pesan Anda untuk {selected['nama']} sudah terkirim. "
-            "Silakan menuju lobby sambil menunggu, atau ke front office jika butuh bantuan offline."
-        )
+    answer = _build_notify_delivery_answer(str(selected["nama"]), delivery_status)
     store_chat_message(conversation_id, "assistant", answer)
     return _build_contact_response(
         answer=answer,
@@ -1000,7 +1004,7 @@ def _handle_stage_message_goal(ctx: dict) -> dict:
         flow_state=_build_stage("idle", flow_context),
         action_result={
             "type": "notify",
-            "status": str((delivered_payload or {}).get("delivery_status") or "sent"),
+            "status": delivery_status or "failed",
             "provider": str((delivered_payload or {}).get("delivery_provider") or initial_message_provider),
             "employee": {
                 "id": selected["id"],
