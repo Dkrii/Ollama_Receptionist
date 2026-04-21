@@ -5,10 +5,39 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
+from lib.contact.call.utils import ACTIVE_CALL_STATUSES
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _build_search_where(
+    *,
+    search: str = "",
+    status: str = "all",
+    status_column: str,
+    searchable_columns: list[str],
+) -> tuple[str, list[str]]:
+    clauses: list[str] = []
+    params: list[str] = []
+
+    normalized_status = str(status or "all").strip().lower()
+    if normalized_status and normalized_status != "all":
+        clauses.append(f"LOWER({status_column}) = ?")
+        params.append(normalized_status)
+
+    normalized_search = str(search or "").strip().lower()
+    if normalized_search:
+        pattern = f"%{normalized_search}%"
+        search_clauses = [f"LOWER(COALESCE({column_name}, '')) LIKE ?" for column_name in searchable_columns]
+        clauses.append(f"({' OR '.join(search_clauses)})")
+        params.extend([pattern] * len(searchable_columns))
+
+    if not clauses:
+        return "", params
+
+    return f"WHERE {' AND '.join(clauses)}", params
 
 
 class AdminRepository:
@@ -643,11 +672,63 @@ class AdminRepository:
             return AdminRepository._fetch_contact_call_by_session_id(connection, call_session_id)
 
     @staticmethod
-    def list_contact_messages(limit: int = 50) -> list[dict]:
+    def count_contact_messages(*, search: str = "", status: str = "all") -> int:
+        where_sql, params = _build_search_where(
+            search=search,
+            status=status,
+            status_column="delivery_status",
+            searchable_columns=[
+                "visitor_name",
+                "visitor_goal",
+                "employee_nama",
+                "employee_departemen",
+                "message_text",
+                "channel",
+                "delivery_status",
+            ],
+        )
+
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM contact_messages
+                {where_sql}
+                """,
+                tuple(params),
+            ).fetchone()
+
+        return int((row["total"] if row else 0) or 0)
+
+    @staticmethod
+    def list_contact_messages(
+        *,
+        limit: int = 50,
+        page: int = 1,
+        search: str = "",
+        status: str = "all",
+    ) -> list[dict]:
         safe_limit = max(1, min(int(limit or 50), 200))
+        safe_page = max(1, int(page or 1))
+        offset = (safe_page - 1) * safe_limit
+        where_sql, params = _build_search_where(
+            search=search,
+            status=status,
+            status_column="delivery_status",
+            searchable_columns=[
+                "visitor_name",
+                "visitor_goal",
+                "employee_nama",
+                "employee_departemen",
+                "message_text",
+                "channel",
+                "delivery_status",
+            ],
+        )
+
         with closing(AdminRepository._connect()) as connection, connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     id,
                     employee_id,
@@ -667,20 +748,70 @@ class AdminRepository:
                     updated_at,
                     sent_at
                 FROM contact_messages
+                {where_sql}
                 ORDER BY id DESC
                 LIMIT ?
+                OFFSET ?
                 """,
-                (safe_limit,),
+                (*params, safe_limit, offset),
             ).fetchall()
 
         return [AdminRepository._row_to_contact_message(row) for row in rows if row]
 
     @staticmethod
-    def list_contact_calls(limit: int = 50) -> list[dict]:
+    def count_contact_calls(*, search: str = "", status: str = "all") -> int:
+        where_sql, params = _build_search_where(
+            search=search,
+            status=status,
+            status_column="call_status",
+            searchable_columns=[
+                "employee_nama",
+                "employee_departemen",
+                "call_status",
+                "call_provider",
+                "call_detail",
+            ],
+        )
+
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM contact_calls
+                {where_sql}
+                """,
+                tuple(params),
+            ).fetchone()
+
+        return int((row["total"] if row else 0) or 0)
+
+    @staticmethod
+    def list_contact_calls(
+        *,
+        limit: int = 50,
+        page: int = 1,
+        search: str = "",
+        status: str = "all",
+    ) -> list[dict]:
         safe_limit = max(1, min(int(limit or 50), 200))
+        safe_page = max(1, int(page or 1))
+        offset = (safe_page - 1) * safe_limit
+        where_sql, params = _build_search_where(
+            search=search,
+            status=status,
+            status_column="call_status",
+            searchable_columns=[
+                "employee_nama",
+                "employee_departemen",
+                "call_status",
+                "call_provider",
+                "call_detail",
+            ],
+        )
+
         with closing(AdminRepository._connect()) as connection, connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     id,
                     employee_id,
@@ -701,10 +832,55 @@ class AdminRepository:
                     ended_at,
                     failure_reason
                 FROM contact_calls
+                {where_sql}
                 ORDER BY id DESC
                 LIMIT ?
+                OFFSET ?
                 """,
-                (safe_limit,),
+                (*params, safe_limit, offset),
             ).fetchall()
 
         return [AdminRepository._row_to_contact_call(row) for row in rows if row]
+
+    @staticmethod
+    def contact_calls_summary() -> dict[str, int]:
+        active_statuses = sorted(ACTIVE_CALL_STATUSES)
+        placeholders = ", ".join("?" for _ in active_statuses)
+        query = f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN call_status IN ({placeholders}) THEN 1 ELSE 0 END), 0) AS active,
+                COALESCE(SUM(CASE WHEN call_status = 'no_response' THEN 1 ELSE 0 END), 0) AS no_response,
+                COALESCE(SUM(CASE WHEN call_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+            FROM contact_calls
+        """
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(query, tuple(active_statuses)).fetchone()
+
+        return {
+            "total": int((row["total"] if row else 0) or 0),
+            "active": int((row["active"] if row else 0) or 0),
+            "no_response": int((row["no_response"] if row else 0) or 0),
+            "failed": int((row["failed"] if row else 0) or 0),
+        }
+
+    @staticmethod
+    def contact_messages_summary() -> dict[str, int]:
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN delivery_status IN ('accepted', 'sent', 'sent_dummy') THEN 1 ELSE 0 END), 0) AS dispatched,
+                    COALESCE(SUM(CASE WHEN delivery_status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+                    COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+                FROM contact_messages
+                """
+            ).fetchone()
+
+        return {
+            "total": int((row["total"] if row else 0) or 0),
+            "dispatched": int((row["dispatched"] if row else 0) or 0),
+            "queued": int((row["queued"] if row else 0) or 0),
+            "failed": int((row["failed"] if row else 0) or 0),
+        }

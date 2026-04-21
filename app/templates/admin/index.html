@@ -8,19 +8,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/admin/admin.css?v=20260408-2" />
+  <link rel="stylesheet" href="/static/admin/admin.css?v=20260421-5" />
 </head>
 <body class="vr-admin-page">
   {% include 'admin/components/sidebar.html' %}
+  <button id="adminSidebarOverlay" class="vr-admin-overlay" type="button" aria-label="Tutup menu"></button>
   {% include 'admin/components/topbar.html' %}
 
   <main class="vr-admin-main" aria-label="Workspace admin">
     <div class="vr-admin-container">
       {% include 'admin/components/view-dashboard.html' %}
       {% include 'admin/components/view-knowledge.html' %}
+      {% include 'admin/components/view-history.html' %}
     </div>
   </main>
 
-  <script src="/static/admin/admin.js?v=20260408-2"></script>
+  <script src="/static/admin/admin.js?v=20260421-5"></script>
 </body>
 </html>

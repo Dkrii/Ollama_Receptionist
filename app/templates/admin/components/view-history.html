@@ -1,0 +1,42 @@
+<section class="vr-admin-view is-hidden" id="adminViewHistory" data-view="history">
+  <section class="vr-admin-pagehead">
+    <h2>History</h2>
+  </section>
+
+  <section class="vr-history-shell">
+    <div id="historySummaryCards" class="vr-history-summary is-hidden"></div>
+
+    <div class="vr-history-tabs" role="tablist" aria-label="History tabs">
+      <button id="historyTabCalls" class="vr-history-tab is-active" type="button" data-history-tab="calls" role="tab" aria-selected="true">
+        Calls
+      </button>
+      <button id="historyTabMessages" class="vr-history-tab" type="button" data-history-tab="messages" role="tab" aria-selected="false">
+        Messages
+      </button>
+    </div>
+
+    <div class="vr-history-toolbar">
+      <label class="vr-history-control">
+        <span>Search</span>
+        <input id="historySearchInput" type="search" placeholder="Cari nama, status, atau detail..." />
+      </label>
+
+      <label class="vr-history-control">
+        <span>Status</span>
+        <select id="historyStatusFilter">
+          <option value="all">Semua</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="vr-history-table-wrap">
+      <table class="vr-history-table" aria-label="Riwayat kontak">
+        <thead id="historyTableHead"></thead>
+        <tbody id="historyTableBody"></tbody>
+      </table>
+    </div>
+
+    <p id="historyTableEmpty" class="vr-history-empty is-hidden">Belum ada riwayat untuk ditampilkan.</p>
+    <div id="historyPagination" class="vr-table-pagination is-hidden"></div>
+  </section>
+</section>

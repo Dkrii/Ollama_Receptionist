@@ -1,6 +1,6 @@
 <section class="vr-admin-view is-hidden" id="adminViewKnowledge" data-view="knowledge">
   <section class="vr-admin-pagehead">
-    <h2>Upload Documents</h2>
+    <h2>Knowledge Documents</h2>
   </section>
 
   <section class="vr-knowledge-layout">
@@ -36,24 +36,46 @@
           <div id="healthCoverageBar" class="vr-health-meter__fill"></div>
         </div>
         <div class="vr-health-row">
-          <span>Queue Depth</span>
+          <span>Pending Reindex</span>
           <strong id="healthQueueValue">-</strong>
         </div>
         <div class="vr-health-row">
           <span>Total Chunks</span>
           <strong id="healthChunksValue">-</strong>
         </div>
+        <div class="vr-health-row">
+          <span>Index Status</span>
+          <strong id="healthIndexStatus">-</strong>
+        </div>
+        <div class="vr-health-row">
+          <span>Last Sync</span>
+          <strong id="healthLastSync">-</strong>
+        </div>
       </article>
-
     </aside>
   </section>
 
   <section class="vr-knowledge-recent">
     <div class="vr-knowledge-recent__head">
       <div>
-        <h3>Recent Uploads</h3>
+        <h3>Documents</h3>
       </div>
-      <button id="clearKnowledgeHistoryBtn" class="vr-knowledge-clear" type="button">Clear History</button>
+    </div>
+
+    <div class="vr-knowledge-toolbar">
+      <label class="vr-knowledge-search">
+        <span>Search</span>
+        <input id="knowledgeSearchInput" type="search" placeholder="Cari nama dokumen..." />
+      </label>
+
+      <label class="vr-knowledge-filter">
+        <span>Status</span>
+        <select id="knowledgeStatusFilter">
+          <option value="all">Semua</option>
+          <option value="indexed">Indexed</option>
+          <option value="pending">Pending</option>
+        </select>
+      </label>
     </div>
 
     <div class="vr-knowledge-table-wrap">
@@ -72,5 +94,6 @@
     </div>
 
     <p id="knowledgeTableEmpty" class="vr-knowledge-list__empty is-hidden">Belum ada data knowledge untuk ditampilkan.</p>
+    <div id="knowledgePagination" class="vr-table-pagination is-hidden"></div>
   </section>
 </section>

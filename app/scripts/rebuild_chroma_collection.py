@@ -9,9 +9,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import settings
-from rag.client import build_collection_metadata, get_chroma_client, get_collection
+from rag.chroma_client import build_collection_metadata, get_chroma_client, get_collection
 from rag.ingest import ingest_knowledge
-from rag.loaders import list_documents
+from rag.documents import list_documents
 from rag.retrieve import retrieve_context
 
 
