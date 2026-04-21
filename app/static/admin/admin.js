@@ -21,6 +21,7 @@ const healthIndexStatus = document.getElementById('healthIndexStatus');
 const healthLastSync = document.getElementById('healthLastSync');
 const knowledgeSearchInput = document.getElementById('knowledgeSearchInput');
 const knowledgeStatusFilter = document.getElementById('knowledgeStatusFilter');
+const knowledgePagination = document.getElementById('knowledgePagination');
 
 const historyTabButtons = document.querySelectorAll('[data-history-tab]');
 const historySearchInput = document.getElementById('historySearchInput');
@@ -29,19 +30,32 @@ const historyTableHead = document.getElementById('historyTableHead');
 const historyTableBody = document.getElementById('historyTableBody');
 const historyTableEmpty = document.getElementById('historyTableEmpty');
 const historySummaryCards = document.getElementById('historySummaryCards');
+const historyPagination = document.getElementById('historyPagination');
+const historyTable = document.querySelector('.vr-history-table');
 
 let stagedFiles = null;
 let latestKnowledgeSummary = null;
+let knowledgeSearchTimer = null;
+let historySearchTimer = null;
+
+const knowledgeState = {
+  items: [],
+  loading: false,
+  error: '',
+  pagination: null,
+  filters: {
+    page: 1,
+    limit: 10,
+    search: '',
+    status: 'all'
+  }
+};
 
 const historyState = {
   activeTab: 'calls',
   items: {
     calls: [],
     messages: []
-  },
-  loaded: {
-    calls: false,
-    messages: false
   },
   loading: {
     calls: false,
@@ -51,15 +65,33 @@ const historyState = {
     calls: '',
     messages: ''
   },
+  pagination: {
+    calls: null,
+    messages: null
+  },
   summary: {
     calls: null,
     messages: null
+  },
+  filters: {
+    calls: {
+      page: 1,
+      limit: 10,
+      search: '',
+      status: 'all'
+    },
+    messages: {
+      page: 1,
+      limit: 10,
+      search: '',
+      status: 'all'
+    }
   }
 };
 
 const HISTORY_CONFIG = {
   calls: {
-    endpoint: '/api/admin/contact-calls?limit=50',
+    endpoint: '/api/admin/contact-calls',
     emptyMessage: 'Belum ada riwayat call.',
     columns: ['Waktu', 'Employee', 'Status', 'Provider', 'Detail'],
     summaryCards: [
@@ -70,7 +102,7 @@ const HISTORY_CONFIG = {
     ]
   },
   messages: {
-    endpoint: '/api/admin/contact-messages?limit=50',
+    endpoint: '/api/admin/contact-messages',
     emptyMessage: 'Belum ada riwayat message.',
     columns: ['Waktu', 'Visitor', 'Employee', 'Status', 'Channel', 'Message'],
     summaryCards: [
@@ -204,6 +236,57 @@ function setButtonBusy(button, busyLabel, isBusy) {
   button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
 }
 
+function buildApiUrl(path, params = {}) {
+  const url = new URL(path, window.location.origin);
+
+  for (const [key, value] of Object.entries(params)) {
+    const normalized = value ?? '';
+    if (normalized === '' || normalized === null) continue;
+    url.searchParams.set(key, String(normalized));
+  }
+
+  return url.pathname + url.search;
+}
+
+function renderPagination(container, pagination, onPageChange) {
+  if (!container) return;
+
+  if (!pagination || pagination.total_items <= pagination.limit) {
+    container.innerHTML = '';
+    container.classList.add('is-hidden');
+    return;
+  }
+
+  container.classList.remove('is-hidden');
+  container.innerHTML = '';
+
+  const meta = document.createElement('div');
+  meta.className = 'vr-table-pagination__meta';
+  meta.textContent = `Page ${pagination.page} / ${pagination.total_pages} • ${pagination.total_items} items`;
+
+  const actions = document.createElement('div');
+  actions.className = 'vr-table-pagination__actions';
+
+  const prevButton = document.createElement('button');
+  prevButton.type = 'button';
+  prevButton.className = 'vr-table-pagination__btn';
+  prevButton.textContent = 'Prev';
+  prevButton.disabled = !pagination.has_prev;
+  prevButton.addEventListener('click', () => onPageChange(pagination.page - 1));
+
+  const nextButton = document.createElement('button');
+  nextButton.type = 'button';
+  nextButton.className = 'vr-table-pagination__btn';
+  nextButton.textContent = 'Next';
+  nextButton.disabled = !pagination.has_next;
+  nextButton.addEventListener('click', () => onPageChange(pagination.page + 1));
+
+  actions.appendChild(prevButton);
+  actions.appendChild(nextButton);
+  container.appendChild(meta);
+  container.appendChild(actions);
+}
+
 function updateSelectedFilesInfo() {
   if (!selectedFileInfo || !docFiles) return;
 
@@ -241,9 +324,14 @@ function activateView(viewName) {
   }
 
   if (viewName === 'history') {
+    syncHistoryControls();
     syncHistoryFilterOptions();
     renderHistoryTable();
     void ensureHistoryData(historyState.activeTab);
+  }
+
+  if (viewName === 'knowledge') {
+    void ensureKnowledgeDocuments();
   }
 
   if (isMobileSidebarMode()) {
@@ -368,22 +456,16 @@ function renderKnowledgeHealth(summaryData) {
   }
 }
 
-function getFilteredKnowledgeRows(summaryData) {
-  const tableRows = summaryData.documents || [];
-  const searchValue = (knowledgeSearchInput?.value || '').trim().toLowerCase();
-  const statusValue = knowledgeStatusFilter?.value || 'all';
-
-  return tableRows.filter((rowData) => {
-    const matchesSearch = !searchValue || String(rowData.document || '').toLowerCase().includes(searchValue);
-    const matchesStatus = statusValue === 'all' || rowData.status === statusValue;
-    return matchesSearch && matchesStatus;
-  });
-}
-
-function renderKnowledgeTable(summaryData) {
+function renderKnowledgeTable() {
   if (!knowledgeTableBody || !knowledgeTableEmpty) return;
-  const tableRows = getFilteredKnowledgeRows(summaryData);
+  const tableRows = knowledgeState.items || [];
   knowledgeTableBody.innerHTML = '';
+
+  if (knowledgeState.loading) {
+    knowledgeTableEmpty.textContent = 'Memuat daftar knowledge...';
+    knowledgeTableEmpty.classList.remove('is-hidden');
+    return;
+  }
 
   for (const rowData of tableRows) {
     const row = document.createElement('tr');
@@ -424,15 +506,21 @@ function renderKnowledgeTable(summaryData) {
 
   knowledgeTableEmpty.classList.toggle('is-hidden', tableRows.length > 0);
   if (!tableRows.length) {
-    knowledgeTableEmpty.textContent = 'Tidak ada dokumen yang cocok dengan filter saat ini.';
+    knowledgeTableEmpty.textContent = knowledgeState.error || 'Tidak ada dokumen yang cocok dengan filter saat ini.';
   }
 }
 
-function renderKnowledgeSummary(summaryData) {
+function renderKnowledgePagination() {
+  renderPagination(knowledgePagination, knowledgeState.pagination, (nextPage) => {
+    knowledgeState.filters.page = nextPage;
+    void ensureKnowledgeDocuments(true);
+  });
+}
+
+function renderKnowledgeSummary(summaryPayload) {
+  const summaryData = summaryPayload?.data || {};
   latestKnowledgeSummary = summaryData;
   renderKnowledgeHealth(summaryData);
-  renderKnowledgeTable(summaryData);
-
   renderDashboard(summaryData);
 
   const statusMessage = summaryData.index_status === 'warning'
@@ -445,8 +533,43 @@ function renderKnowledgeSummary(summaryData) {
 async function refreshKnowledgeSummary() {
   const response = await fetch('/api/admin/knowledge-summary');
   if (!response.ok) throw new Error('Gagal memuat ringkasan knowledge');
-  const data = await response.json();
-  renderKnowledgeSummary(data);
+  const payload = await response.json();
+  renderKnowledgeSummary(payload);
+}
+
+async function fetchKnowledgeDocuments() {
+  const response = await fetch(
+    buildApiUrl('/api/admin/knowledge-documents', knowledgeState.filters)
+  );
+  if (!response.ok) throw new Error('Gagal memuat daftar knowledge');
+  return response.json();
+}
+
+async function ensureKnowledgeDocuments(force = false) {
+  if (knowledgeState.loading && !force) return;
+
+  knowledgeState.loading = true;
+  knowledgeState.error = '';
+  renderKnowledgeTable();
+  renderKnowledgePagination();
+
+  try {
+    const payload = await fetchKnowledgeDocuments();
+    knowledgeState.items = payload.data || [];
+    knowledgeState.pagination = payload.pagination || null;
+    if (payload.pagination?.page) {
+      knowledgeState.filters.page = payload.pagination.page;
+    }
+  } catch (error) {
+    knowledgeState.items = [];
+    knowledgeState.pagination = null;
+    knowledgeState.error = error.message || 'Gagal memuat daftar knowledge';
+    setPageStatus(knowledgeState.error, 'warning');
+  } finally {
+    knowledgeState.loading = false;
+    renderKnowledgeTable();
+    renderKnowledgePagination();
+  }
 }
 
 async function deleteKnowledgeDocument(path) {
@@ -478,6 +601,20 @@ async function triggerReindex() {
 
 function getHistoryTabLabel(tabName) {
   return tabName === 'messages' ? 'message' : 'call';
+}
+
+function getActiveHistoryFilters() {
+  return historyState.filters[historyState.activeTab];
+}
+
+function syncHistoryControls() {
+  const filters = getActiveHistoryFilters();
+  if (historySearchInput) {
+    historySearchInput.value = filters.search || '';
+  }
+  if (historyStatusFilter) {
+    historyStatusFilter.value = filters.status || 'all';
+  }
 }
 
 function createStackContent(primary, secondary = '') {
@@ -522,6 +659,9 @@ function getStatusChipClass(statusValue) {
 
 function buildHistoryTableHead(tabName) {
   if (!historyTableHead) return;
+  if (historyTable) {
+    historyTable.dataset.historyTab = tabName;
+  }
 
   const row = document.createElement('tr');
   for (const label of HISTORY_CONFIG[tabName].columns) {
@@ -586,44 +726,14 @@ function getHistoryStatusValue(item, tabName) {
 }
 
 function getFilteredHistoryItems(tabName) {
-  const searchValue = (historySearchInput?.value || '').trim().toLowerCase();
-  const statusValue = historyStatusFilter?.value || 'all';
-  const items = historyState.items[tabName] || [];
-
-  return items.filter((item) => {
-    const searchParts = tabName === 'messages'
-      ? [
-          item.visitor_name,
-          item.visitor_goal,
-          item.employee_nama,
-          item.employee_departemen,
-          item.delivery_status,
-          item.channel,
-          item.message_text
-        ]
-      : [
-          item.employee_nama,
-          item.employee_departemen,
-          item.call_status,
-          item.call_provider,
-          item.call_detail
-        ];
-
-    const haystack = searchParts
-      .map((part) => String(part || '').toLowerCase())
-      .join(' ');
-
-    const matchesSearch = !searchValue || haystack.includes(searchValue);
-    const matchesStatus = statusValue === 'all' || getHistoryStatusValue(item, tabName) === statusValue;
-    return matchesSearch && matchesStatus;
-  });
+  return historyState.items[tabName] || [];
 }
 
 function syncHistoryFilterOptions() {
   if (!historyStatusFilter) return;
 
   const tabName = historyState.activeTab;
-  const currentValue = historyStatusFilter.value || 'all';
+  const currentValue = historyState.filters[tabName].status || 'all';
   const items = historyState.items[tabName] || [];
   const statusValues = Array.from(
     new Set(
@@ -649,6 +759,14 @@ function syncHistoryFilterOptions() {
   historyStatusFilter.value = statusValues.includes(currentValue) || currentValue === 'all'
     ? currentValue
     : 'all';
+}
+
+function renderHistoryPagination() {
+  const tabName = historyState.activeTab;
+  renderPagination(historyPagination, historyState.pagination[tabName], (nextPage) => {
+    historyState.filters[tabName].page = nextPage;
+    void ensureHistoryData(tabName, true);
+  });
 }
 
 function renderCallHistoryRows(items) {
@@ -731,6 +849,7 @@ function renderHistoryTable() {
 
   const tabName = historyState.activeTab;
   renderHistorySummary();
+  renderHistoryPagination();
   buildHistoryTableHead(tabName);
 
   if (historyState.loading[tabName]) {
@@ -763,14 +882,15 @@ function renderHistoryTable() {
 }
 
 async function fetchHistoryData(tabName) {
-  const response = await fetch(HISTORY_CONFIG[tabName].endpoint);
+  const response = await fetch(
+    buildApiUrl(HISTORY_CONFIG[tabName].endpoint, historyState.filters[tabName])
+  );
   if (!response.ok) throw new Error(`Gagal memuat riwayat ${getHistoryTabLabel(tabName)}`);
   return response.json();
 }
 
 async function ensureHistoryData(tabName, force = false) {
-  if (historyState.loading[tabName]) return;
-  if (historyState.loaded[tabName] && !force) return;
+  if (historyState.loading[tabName] && !force) return;
 
   historyState.loading[tabName] = true;
   historyState.errors[tabName] = '';
@@ -778,15 +898,20 @@ async function ensureHistoryData(tabName, force = false) {
 
   try {
     const payload = await fetchHistoryData(tabName);
-    historyState.items[tabName] = payload.items || [];
+    historyState.items[tabName] = payload.data || [];
     historyState.summary[tabName] = payload.summary || null;
-    historyState.loaded[tabName] = true;
+    historyState.pagination[tabName] = payload.pagination || null;
+    if (payload.pagination?.page) {
+      historyState.filters[tabName].page = payload.pagination.page;
+    }
   } catch (error) {
     historyState.errors[tabName] = error.message || `Gagal memuat riwayat ${getHistoryTabLabel(tabName)}`;
     historyState.summary[tabName] = null;
+    historyState.pagination[tabName] = null;
     setPageStatus(historyState.errors[tabName], 'warning');
   } finally {
     historyState.loading[tabName] = false;
+    syncHistoryControls();
     syncHistoryFilterOptions();
     renderHistoryTable();
   }
@@ -801,6 +926,7 @@ function activateHistoryTab(tabName) {
     button.setAttribute('aria-selected', isActive ? 'true' : 'false');
   }
 
+  syncHistoryControls();
   syncHistoryFilterOptions();
   renderHistoryTable();
   void ensureHistoryData(historyState.activeTab);
@@ -811,6 +937,7 @@ uploadBtn.addEventListener('click', async () => {
   try {
     await uploadDocuments();
     await refreshKnowledgeSummary();
+    await ensureKnowledgeDocuments(true);
     setPageStatus('Upload dokumen selesai', 'active');
   } catch (error) {
     setPageStatus('Warning: upload dokumen gagal', 'warning');
@@ -824,6 +951,7 @@ reindexBtn.addEventListener('click', async () => {
   try {
     await triggerReindex();
     await refreshKnowledgeSummary();
+    await ensureKnowledgeDocuments(true);
   } catch (error) {
     setPageStatus('Warning: reindex gagal', 'warning');
   } finally {
@@ -835,6 +963,7 @@ refreshStatusBtn.addEventListener('click', async () => {
   setButtonBusy(refreshStatusBtn, 'Refreshing...', true);
   try {
     await refreshKnowledgeSummary();
+    await ensureKnowledgeDocuments(true);
   } catch (error) {
     setPageStatus('Warning: refresh knowledge gagal', 'warning');
   } finally {
@@ -881,29 +1010,41 @@ if (uploadDropzone && docFiles) {
 
 if (knowledgeSearchInput) {
   knowledgeSearchInput.addEventListener('input', () => {
-    if (latestKnowledgeSummary) {
-      renderKnowledgeTable(latestKnowledgeSummary);
-    }
+    knowledgeState.filters.search = knowledgeSearchInput.value.trim();
+    knowledgeState.filters.page = 1;
+    window.clearTimeout(knowledgeSearchTimer);
+    knowledgeSearchTimer = window.setTimeout(() => {
+      void ensureKnowledgeDocuments(true);
+    }, 220);
   });
 }
 
 if (knowledgeStatusFilter) {
   knowledgeStatusFilter.addEventListener('change', () => {
-    if (latestKnowledgeSummary) {
-      renderKnowledgeTable(latestKnowledgeSummary);
-    }
+    knowledgeState.filters.status = knowledgeStatusFilter.value || 'all';
+    knowledgeState.filters.page = 1;
+    void ensureKnowledgeDocuments(true);
   });
 }
 
 if (historySearchInput) {
   historySearchInput.addEventListener('input', () => {
-    renderHistoryTable();
+    const filters = getActiveHistoryFilters();
+    filters.search = historySearchInput.value.trim();
+    filters.page = 1;
+    window.clearTimeout(historySearchTimer);
+    historySearchTimer = window.setTimeout(() => {
+      void ensureHistoryData(historyState.activeTab, true);
+    }, 220);
   });
 }
 
 if (historyStatusFilter) {
   historyStatusFilter.addEventListener('change', () => {
-    renderHistoryTable();
+    const filters = getActiveHistoryFilters();
+    filters.status = historyStatusFilter.value || 'all';
+    filters.page = 1;
+    void ensureHistoryData(historyState.activeTab, true);
   });
 }
 
@@ -949,6 +1090,7 @@ if (knowledgeTableBody) {
     try {
       const result = await deleteKnowledgeDocument(documentPath);
       await refreshKnowledgeSummary();
+      await ensureKnowledgeDocuments(true);
       setPageStatus(`Dokumen dihapus: ${result.deleted}`, 'active');
     } catch (error) {
       setPageStatus(error.message || 'Warning: gagal menghapus dokumen', 'warning');
@@ -995,8 +1137,9 @@ if (mobileSidebarQuery && typeof mobileSidebarQuery.addEventListener === 'functi
     activateHistoryTab('calls');
     activateView(getViewFromHash());
     await refreshKnowledgeSummary();
+    await ensureKnowledgeDocuments(true);
     if (getViewFromHash() === 'history') {
-      await ensureHistoryData(historyState.activeTab);
+      await ensureHistoryData(historyState.activeTab, true);
     }
     setPageStatus('Admin Active', 'active');
   } catch (error) {

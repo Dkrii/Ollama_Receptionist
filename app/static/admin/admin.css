@@ -801,6 +801,7 @@ body.vr-admin-page {
   width: 100%;
   border-collapse: collapse;
   min-width: 860px;
+  table-layout: auto;
 }
 
 .vr-history-table thead {
@@ -815,6 +816,7 @@ body.vr-admin-page {
   font-size: 13px;
   border-bottom: 1px solid #e6eef6;
   vertical-align: top;
+  white-space: nowrap;
 }
 
 .vr-history-table th {
@@ -854,18 +856,68 @@ body.vr-admin-page {
   color: var(--k-text-muted);
 }
 
-.vr-history-cell--copy {
-  min-width: 260px;
-}
-
 .vr-history-copy {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
   color: #314a5d;
   line-height: 1.5;
   white-space: normal;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  max-width: 36ch;
+  overflow-wrap: anywhere;
+}
+
+.vr-history-table[data-history-tab="calls"] th:nth-child(1),
+.vr-history-table[data-history-tab="calls"] td:nth-child(1) {
+  width: 22%;
+}
+
+.vr-history-table[data-history-tab="calls"] th:nth-child(2),
+.vr-history-table[data-history-tab="calls"] td:nth-child(2) {
+  width: 24%;
+}
+
+.vr-history-table[data-history-tab="calls"] th:nth-child(3),
+.vr-history-table[data-history-tab="calls"] td:nth-child(3) {
+  width: 12%;
+}
+
+.vr-history-table[data-history-tab="calls"] th:nth-child(4),
+.vr-history-table[data-history-tab="calls"] td:nth-child(4) {
+  width: 12%;
+}
+
+.vr-history-table[data-history-tab="calls"] th:nth-child(5),
+.vr-history-table[data-history-tab="calls"] td:nth-child(5) {
+  width: 30%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(1),
+.vr-history-table[data-history-tab="messages"] td:nth-child(1) {
+  width: 16%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(2),
+.vr-history-table[data-history-tab="messages"] td:nth-child(2) {
+  width: 17%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(3),
+.vr-history-table[data-history-tab="messages"] td:nth-child(3) {
+  width: 18%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(4),
+.vr-history-table[data-history-tab="messages"] td:nth-child(4) {
+  width: 12%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(5),
+.vr-history-table[data-history-tab="messages"] td:nth-child(5) {
+  width: 10%;
+}
+
+.vr-history-table[data-history-tab="messages"] th:nth-child(6),
+.vr-history-table[data-history-tab="messages"] td:nth-child(6) {
+  width: 27%;
 }
 
 .vr-status-chip {
@@ -915,6 +967,53 @@ body.vr-admin-page {
   font-size: 13px;
 }
 
+.vr-table-pagination {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vr-table-pagination.is-hidden {
+  display: none;
+}
+
+.vr-table-pagination__meta {
+  font-size: 12px;
+  color: #5d7386;
+}
+
+.vr-table-pagination__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vr-table-pagination__btn {
+  min-width: 84px;
+  min-height: 38px;
+  border: 1px solid #c9dceb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #173a54;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.vr-table-pagination__btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #a8c7dd;
+  background: #f4f9ff;
+}
+
+.vr-table-pagination__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .vr-knowledge-table-wrap {
   margin-top: 0;
   border: 1px solid #d9e5f1;
@@ -926,6 +1025,7 @@ body.vr-admin-page {
   width: 100%;
   border-collapse: collapse;
   min-width: 640px;
+  table-layout: auto;
 }
 
 .vr-knowledge-table thead {
@@ -978,6 +1078,29 @@ body.vr-admin-page {
 
 .vr-knowledge-table td:first-child {
   font-weight: 600;
+  white-space: normal;
+  max-width: 36ch;
+  overflow-wrap: anywhere;
+}
+
+.vr-knowledge-table th:nth-child(2),
+.vr-knowledge-table td:nth-child(2) {
+  width: 10%;
+}
+
+.vr-knowledge-table th:nth-child(3),
+.vr-knowledge-table td:nth-child(3) {
+  width: 14%;
+}
+
+.vr-knowledge-table th:nth-child(4),
+.vr-knowledge-table td:nth-child(4) {
+  width: 20%;
+}
+
+.vr-knowledge-table th:nth-child(5),
+.vr-knowledge-table td:nth-child(5) {
+  width: 12%;
 }
 
 .vr-knowledge-actions {
@@ -1125,6 +1248,11 @@ body.vr-admin-page {
 
   .vr-history-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vr-table-pagination {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .vr-knowledge-recent__head h3 {

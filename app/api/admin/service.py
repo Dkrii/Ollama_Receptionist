@@ -15,8 +15,36 @@ from rag.documents import SUPPORTED_EXTENSIONS, list_documents
 
 class AdminAppService:
     @staticmethod
-    def _safe_limit(limit: int = 50) -> int:
-        return max(1, min(int(limit or 50), 200))
+    def _safe_limit(limit: int = 10) -> int:
+        return max(1, min(int(limit or 10), 200))
+
+    @staticmethod
+    def _safe_page(page: int = 1) -> int:
+        return max(1, int(page or 1))
+
+    @staticmethod
+    def _build_pagination(*, page: int, limit: int, total_items: int) -> dict:
+        total_pages = max(1, (total_items + limit - 1) // limit) if total_items else 1
+        current_page = min(page, total_pages)
+        return {
+            "page": current_page,
+            "limit": limit,
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < total_pages,
+        }
+
+    @staticmethod
+    def _message_response(message: str, data: list | dict, pagination: dict | None = None, **extra: dict) -> dict:
+        payload = {
+            "message": message,
+            "data": data,
+        }
+        if pagination is not None:
+            payload["pagination"] = pagination
+        payload.update(extra)
+        return payload
 
     @staticmethod
     def reindex() -> dict:
@@ -202,7 +230,7 @@ class AdminAppService:
         return str(path_obj)
 
     @staticmethod
-    def knowledge_summary() -> dict:
+    def _build_knowledge_snapshot() -> dict:
         knowledge_dir = AdminAppService._ensure_knowledge_dir()
         documents = list_documents(knowledge_dir)
         source_paths = [str(path.relative_to(knowledge_dir)) for path in documents]
@@ -298,9 +326,84 @@ class AdminAppService:
         }
 
     @staticmethod
-    def contact_calls(limit: int = 50) -> dict:
+    def knowledge_summary() -> dict:
+        snapshot = AdminAppService._build_knowledge_snapshot()
+        summary_data = {
+            key: value
+            for key, value in snapshot.items()
+            if key != "documents"
+        }
+        return AdminAppService._message_response(
+            "Ringkasan knowledge berhasil dimuat",
+            summary_data,
+        )
+
+    @staticmethod
+    def knowledge_documents(
+        *,
+        page: int = 1,
+        limit: int = 10,
+        search: str = "",
+        status: str = "all",
+    ) -> dict:
+        safe_page = AdminAppService._safe_page(page)
         safe_limit = AdminAppService._safe_limit(limit)
-        rows = AdminRepository.list_contact_calls(safe_limit)
+        normalized_search = str(search or "").strip().lower()
+        normalized_status = str(status or "all").strip().lower()
+
+        snapshot = AdminAppService._build_knowledge_snapshot()
+        rows = snapshot.get("documents", [])
+
+        if normalized_search:
+            rows = [
+                row for row in rows
+                if normalized_search in str(row.get("document") or "").lower()
+            ]
+
+        if normalized_status and normalized_status != "all":
+            rows = [
+                row for row in rows
+                if str(row.get("status") or "").lower() == normalized_status
+            ]
+
+        total_items = len(rows)
+        pagination = AdminAppService._build_pagination(
+            page=safe_page,
+            limit=safe_limit,
+            total_items=total_items,
+        )
+        current_page = int(pagination["page"])
+        offset = (current_page - 1) * safe_limit
+        items = rows[offset: offset + safe_limit]
+
+        return AdminAppService._message_response(
+            "Daftar dokumen knowledge berhasil dimuat",
+            items,
+            pagination=pagination,
+        )
+
+    @staticmethod
+    def contact_calls(
+        *,
+        page: int = 1,
+        limit: int = 10,
+        search: str = "",
+        status: str = "all",
+    ) -> dict:
+        safe_page = AdminAppService._safe_page(page)
+        safe_limit = AdminAppService._safe_limit(limit)
+        total_items = AdminRepository.count_contact_calls(search=search, status=status)
+        pagination = AdminAppService._build_pagination(
+            page=safe_page,
+            limit=safe_limit,
+            total_items=total_items,
+        )
+        rows = AdminRepository.list_contact_calls(
+            limit=safe_limit,
+            page=int(pagination["page"]),
+            search=search,
+            status=status,
+        )
         items = [
             {
                 "id": row["id"],
@@ -315,17 +418,35 @@ class AdminAppService:
             }
             for row in rows
         ]
-        return {
-            "items": items,
-            "count": len(items),
-            "limit": safe_limit,
-            "summary": AdminRepository.contact_calls_summary(),
-        }
+        return AdminAppService._message_response(
+            "Riwayat call berhasil dimuat",
+            items,
+            pagination=pagination,
+            summary=AdminRepository.contact_calls_summary(),
+        )
 
     @staticmethod
-    def contact_messages(limit: int = 50) -> dict:
+    def contact_messages(
+        *,
+        page: int = 1,
+        limit: int = 10,
+        search: str = "",
+        status: str = "all",
+    ) -> dict:
+        safe_page = AdminAppService._safe_page(page)
         safe_limit = AdminAppService._safe_limit(limit)
-        rows = AdminRepository.list_contact_messages(safe_limit)
+        total_items = AdminRepository.count_contact_messages(search=search, status=status)
+        pagination = AdminAppService._build_pagination(
+            page=safe_page,
+            limit=safe_limit,
+            total_items=total_items,
+        )
+        rows = AdminRepository.list_contact_messages(
+            limit=safe_limit,
+            page=int(pagination["page"]),
+            search=search,
+            status=status,
+        )
         items = [
             {
                 "id": row["id"],
@@ -341,9 +462,9 @@ class AdminAppService:
             }
             for row in rows
         ]
-        return {
-            "items": items,
-            "count": len(items),
-            "limit": safe_limit,
-            "summary": AdminRepository.contact_messages_summary(),
-        }
+        return AdminAppService._message_response(
+            "Riwayat message berhasil dimuat",
+            items,
+            pagination=pagination,
+            summary=AdminRepository.contact_messages_summary(),
+        )

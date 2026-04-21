@@ -41,18 +41,47 @@ def knowledge_summary():
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/admin/contact-calls")
-def contact_calls(limit: int = 50):
+@router.get("/admin/knowledge-documents")
+def knowledge_documents(page: int = 1, limit: int = 10, search: str = "", status: str = "all"):
     try:
-        return JSONResponse(AdminAppService.contact_calls(limit))
+        return JSONResponse(
+            AdminAppService.knowledge_documents(
+                page=page,
+                limit=limit,
+                search=search,
+                status=status,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/admin/contact-calls")
+def contact_calls(page: int = 1, limit: int = 10, search: str = "", status: str = "all"):
+    try:
+        return JSONResponse(
+            AdminAppService.contact_calls(
+                page=page,
+                limit=limit,
+                search=search,
+                status=status,
+            )
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/admin/contact-messages")
-def contact_messages(limit: int = 50):
+def contact_messages(page: int = 1, limit: int = 10, search: str = "", status: str = "all"):
     try:
-        return JSONResponse(AdminAppService.contact_messages(limit))
+        return JSONResponse(
+            AdminAppService.contact_messages(
+                page=page,
+                limit=limit,
+                search=search,
+                status=status,
+            )
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
