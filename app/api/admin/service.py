@@ -7,9 +7,9 @@ from fastapi import UploadFile
 
 from ai_client import provider_health
 from config import settings
-from rag.client import get_chroma_client, get_collection
+from rag.chroma_client import get_chroma_client, get_collection
 from rag.ingest import ingest_knowledge
-from rag.loaders import SUPPORTED_EXTENSIONS, list_documents
+from rag.documents import SUPPORTED_EXTENSIONS, list_documents
 
 
 class AdminAppService:

@@ -5,7 +5,7 @@ import time
 from typing import Dict, List
 
 from config import settings
-from rag.client import get_collection, embed_texts
+from rag.chroma_client import get_collection, embed_texts
 
 
 _logger = logging.getLogger(__name__)

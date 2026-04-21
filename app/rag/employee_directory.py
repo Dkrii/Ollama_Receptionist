@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 from config import settings
-from rag.loaders import list_documents, read_document
+from rag.documents import list_documents, read_document
 
 
 _PHONE_PATTERN = re.compile(r"\+?[0-9][0-9\s\-()]{7,}[0-9]")

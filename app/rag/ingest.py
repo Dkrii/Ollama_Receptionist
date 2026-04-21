@@ -2,8 +2,8 @@ from pathlib import Path
 from typing import Dict
 
 from config import settings
-from rag.client import get_collection, embed_texts
-from rag.loaders import list_documents, read_document, build_chunks
+from rag.chroma_client import get_collection, embed_texts
+from rag.documents import list_documents, read_document, build_chunks
 
 
 def ingest_knowledge(knowledge_dir: Path | None = None) -> Dict:
