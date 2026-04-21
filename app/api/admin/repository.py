@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
+from lib.contact.call.utils import ACTIVE_CALL_STATUSES
 
 
 def _utc_now_iso() -> str:
@@ -708,3 +709,46 @@ class AdminRepository:
             ).fetchall()
 
         return [AdminRepository._row_to_contact_call(row) for row in rows if row]
+
+    @staticmethod
+    def contact_calls_summary() -> dict[str, int]:
+        active_statuses = sorted(ACTIVE_CALL_STATUSES)
+        placeholders = ", ".join("?" for _ in active_statuses)
+        query = f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN call_status IN ({placeholders}) THEN 1 ELSE 0 END), 0) AS active,
+                COALESCE(SUM(CASE WHEN call_status = 'no_response' THEN 1 ELSE 0 END), 0) AS no_response,
+                COALESCE(SUM(CASE WHEN call_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+            FROM contact_calls
+        """
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(query, tuple(active_statuses)).fetchone()
+
+        return {
+            "total": int((row["total"] if row else 0) or 0),
+            "active": int((row["active"] if row else 0) or 0),
+            "no_response": int((row["no_response"] if row else 0) or 0),
+            "failed": int((row["failed"] if row else 0) or 0),
+        }
+
+    @staticmethod
+    def contact_messages_summary() -> dict[str, int]:
+        with closing(AdminRepository._connect()) as connection, connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN delivery_status IN ('accepted', 'sent', 'sent_dummy') THEN 1 ELSE 0 END), 0) AS dispatched,
+                    COALESCE(SUM(CASE WHEN delivery_status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+                    COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+                FROM contact_messages
+                """
+            ).fetchone()
+
+        return {
+            "total": int((row["total"] if row else 0) or 0),
+            "dispatched": int((row["dispatched"] if row else 0) or 0),
+            "queued": int((row["queued"] if row else 0) or 0),
+            "failed": int((row["failed"] if row else 0) or 0),
+        }

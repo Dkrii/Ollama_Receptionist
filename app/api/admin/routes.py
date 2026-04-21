@@ -41,6 +41,22 @@ def knowledge_summary():
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/admin/contact-calls")
+def contact_calls(limit: int = 50):
+    try:
+        return JSONResponse(AdminAppService.contact_calls(limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/admin/contact-messages")
+def contact_messages(limit: int = 50):
+    try:
+        return JSONResponse(AdminAppService.contact_messages(limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.delete("/admin/documents")
 def delete_document(payload: DeleteDocumentPayload):
     try:

@@ -1,17 +1,27 @@
-<aside class="vr-admin-sidebar" aria-label="Admin menu">
-  <div class="vr-admin-brand">
-    <h1 class="vr-admin-brand__title">Virtual Receptionist</h1>
-    <p class="vr-admin-brand__sub">Knowledge Admin</p>
+<aside id="adminSidebar" class="vr-admin-sidebar" aria-label="Admin menu">
+  <button id="sidebarToggleBtn" class="vr-admin-iconbtn vr-admin-sidebar__edge-toggle" type="button" aria-label="Collapse sidebar" aria-pressed="false">
+    <span id="sidebarToggleIcon" class="material-symbols-outlined">chevron_left</span>
+  </button>
+
+  <div class="vr-admin-sidebar__head">
+    <div class="vr-admin-brand">
+      <h1 class="vr-admin-brand__title">Virtual Receptionist</h1>
+      <p class="vr-admin-brand__sub">Operations Admin</p>
+    </div>
   </div>
 
   <nav class="vr-admin-nav" aria-label="Navigasi admin">
     <a class="vr-admin-nav__item is-active" href="#dashboard" data-view="dashboard">
       <span class="material-symbols-outlined">dashboard</span>
-      <span>Dashboard</span>
+      <span class="vr-admin-nav__label">Dashboard</span>
     </a>
     <a class="vr-admin-nav__item" href="#knowledge" data-view="knowledge">
       <span class="material-symbols-outlined">database</span>
-      <span>Knowledge</span>
+      <span class="vr-admin-nav__label">Knowledge</span>
+    </a>
+    <a class="vr-admin-nav__item" href="#history" data-view="history">
+      <span class="material-symbols-outlined">history</span>
+      <span class="vr-admin-nav__label">History</span>
     </a>
   </nav>
 </aside>

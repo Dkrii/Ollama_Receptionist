@@ -5,6 +5,7 @@ import shutil
 import requests
 from fastapi import UploadFile
 
+from api.admin.repository import AdminRepository
 from ai_client import provider_health
 from config import settings
 from rag.chroma_client import get_chroma_client, get_collection
@@ -13,6 +14,10 @@ from rag.documents import SUPPORTED_EXTENSIONS, list_documents
 
 
 class AdminAppService:
+    @staticmethod
+    def _safe_limit(limit: int = 50) -> int:
+        return max(1, min(int(limit or 50), 200))
+
     @staticmethod
     def reindex() -> dict:
         return ingest_knowledge()
@@ -290,4 +295,55 @@ class AdminAppService:
             "index_status": index_status,
             "index_detail": index_detail,
             "checked_at": datetime.now(UTC).isoformat(),
+        }
+
+    @staticmethod
+    def contact_calls(limit: int = 50) -> dict:
+        safe_limit = AdminAppService._safe_limit(limit)
+        rows = AdminRepository.list_contact_calls(safe_limit)
+        items = [
+            {
+                "id": row["id"],
+                "employee_nama": row["employee_nama"],
+                "employee_departemen": row["employee_departemen"],
+                "call_status": row["call_status"],
+                "call_detail": row["call_detail"],
+                "call_provider": row["call_provider"],
+                "created_at": row["created_at"],
+                "connected_at": row["connected_at"],
+                "ended_at": row["ended_at"],
+            }
+            for row in rows
+        ]
+        return {
+            "items": items,
+            "count": len(items),
+            "limit": safe_limit,
+            "summary": AdminRepository.contact_calls_summary(),
+        }
+
+    @staticmethod
+    def contact_messages(limit: int = 50) -> dict:
+        safe_limit = AdminAppService._safe_limit(limit)
+        rows = AdminRepository.list_contact_messages(safe_limit)
+        items = [
+            {
+                "id": row["id"],
+                "visitor_name": row["visitor_name"],
+                "visitor_goal": row["visitor_goal"],
+                "employee_nama": row["employee_nama"],
+                "employee_departemen": row["employee_departemen"],
+                "message_text": row["message_text"],
+                "delivery_status": row["delivery_status"],
+                "channel": row["channel"],
+                "created_at": row["created_at"],
+                "sent_at": row["sent_at"],
+            }
+            for row in rows
+        ]
+        return {
+            "items": items,
+            "count": len(items),
+            "limit": safe_limit,
+            "summary": AdminRepository.contact_messages_summary(),
         }
