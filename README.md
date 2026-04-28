@@ -114,8 +114,8 @@ Referensi detail alur: [docs/chat-rag-flow.md](docs/chat-rag-flow.md)
 ## Struktur Modul Utama
 
 - `app/main.py`: bootstrap FastAPI, router registration, lifespan init
-- `app/api/`: route FastAPI dan schema HTTP
-- `app/chat/`: service percakapan, memory, NLU, RAG flow, dan contact flow
+- `app/api/`: route FastAPI, schema HTTP, dan application service endpoint
+- `app/chat/`: memory percakapan, NLU, RAG flow, dan contact flow
 - `app/knowledge/`: document loader, ingest, Chroma, retrieval, dan generation
 - `app/contacts/`: employee directory, matching, call provider, dan WhatsApp messaging
 - `app/storage/`: repository SQLite untuk chat history dan admin/contact logs

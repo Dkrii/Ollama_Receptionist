@@ -36,12 +36,21 @@ class ChatAppService:
                     meta_payload["conversation_id"] = handled_conversation_id
                 yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
                 if handled_action:
-                    yield json.dumps({"type": "action", "value": handled_action}, ensure_ascii=False) + "\n"
+                    yield json.dumps(
+                        {"type": "action", "value": handled_action}, ensure_ascii=False
+                    ) + "\n"
                 if handled_answer:
-                    yield json.dumps({"type": "token", "value": handled_answer}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "citations", "value": []}, ensure_ascii=False) + "\n"
+                    yield json.dumps(
+                        {"type": "token", "value": handled_answer}, ensure_ascii=False
+                    ) + "\n"
+                yield json.dumps(
+                    {"type": "citations", "value": []}, ensure_ascii=False
+                ) + "\n"
                 if handled_follow_up:
-                    yield json.dumps({"type": "follow_up", "value": handled_follow_up}, ensure_ascii=False) + "\n"
+                    yield json.dumps(
+                        {"type": "follow_up", "value": handled_follow_up},
+                        ensure_ascii=False,
+                    ) + "\n"
                 yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
 
             return _contact_events()

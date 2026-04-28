@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from api.chat_service import ChatAppService
 from api.schemas.chat import ChatRequest
-from chat.service import ChatAppService
 
 
 router = APIRouter(prefix="/api", tags=["chat"])
