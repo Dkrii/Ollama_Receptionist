@@ -5,12 +5,12 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api.admin.repository import AdminRepository
-from api.admin.routes import router as admin_router
-from api.chat.repository import ChatRepository
-from api.chat.routes import router as chat_router
-from api.contact.routes import router as contact_call_router
-from api.web.routes import router as web_router
+from api.admin_routes import router as admin_router
+from api.chat_routes import router as chat_router
+from api.contact_routes import router as contact_call_router
+from api.web_routes import router as web_router
+from storage.admin_repository import AdminRepository
+from storage.chat_repository import ChatRepository
 from middleware import RequestLoggerMiddleware
 
 
