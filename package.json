@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "sync:twilio-voice-sdk": "node tools/sync-twilio-voice-sdk.mjs"
+    "sync:twilio-voice-sdk": "node scripts/sync-twilio-voice-sdk.mjs"
   },
   "dependencies": {
     "@twilio/voice-sdk": "^2.18.1"

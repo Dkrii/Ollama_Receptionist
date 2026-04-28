@@ -32,10 +32,10 @@ Bagian ini disusun agar siap dipakai untuk laporan teknis.
 ### 3) Frontend Layer
 
 - Jinja2 `3.1.6` untuk templating server-side
-- Static frontend assets di `app/static/`:
-  - `kiosk/` (UI resepsionis)
+- Static frontend assets di `frontend/src/static/`:
   - `dev/` (halaman pengujian/dev)
   - `admin/` (panel admin knowledge & employee)
+  - `shared/` dan `vendor/` (asset bersama dan library vendor)
 - Browser Web Speech API (STT/TTS client-side)
 
 ### 4) AI / RAG Stack
@@ -113,13 +113,17 @@ Referensi detail alur: [docs/chat-rag-flow.md](docs/chat-rag-flow.md)
 
 ## Struktur Modul Utama
 
-- `app/main.py`: bootstrap FastAPI, router registration, lifespan init
-- `app/api/chat/`: chat route, schema, service, repository, intent
-- `app/api/admin/`: admin route/service/repository untuk knowledge & employee
-- `app/api/web/`: route halaman `/`, `/dev`, `/admin`
-- `app/rag/`: client, ingest, loader, retrieve, generate
-- `app/templates/`: template HTML Jinja
-- `app/static/`: JS/CSS frontend
+- `backend/app/main.py`: bootstrap FastAPI, router registration, lifespan init
+- `backend/app/modules/admin/`: route, schema, service, dan repository untuk admin panel
+- `backend/app/modules/chat/`: route, schema, service, repository, NLP, shared chat utilities, dan conversation flows
+- `backend/app/common/`: utility umum lintas domain aplikasi
+- `backend/app/modules/knowledge_base/`: document loader, ingest, Chroma, retrieval, dan generation
+- `backend/app/modules/contacts/`: employee directory, matching, call provider, dan WhatsApp messaging
+- `backend/app/storage/`: koneksi/helper SQLite lintas domain
+- `backend/app/modules/web/`: route dan service halaman web
+- `backend/app/ai/`: client AI untuk chat, streaming, embedding, dan health check
+- `frontend/src/templates/`: template HTML Jinja
+- `frontend/src/static/`: JS/CSS frontend
 - `knowledge/`: sumber dokumen knowledge base
 - `runtime/`: penyimpanan SQLite lokal/dev
 - `qa/`: benchmark dan hasil evaluasi
@@ -288,7 +292,7 @@ Untuk laporan komparatif, gunakan template:
 
 ## Catatan Implementasi
 
-- Source `app/` di-mount sebagai volume ke container app.
+- Source `backend/app/` di-mount sebagai backend container, dan `frontend/src/` di-mount sebagai sumber template/static.
 - Runtime chat SQLite dipisahkan di volume named agar lebih stabil.
 - Backend dijalankan tanpa auto-reload di container untuk konsistensi runtime.
 - STT/TTS dijalankan di browser untuk kompatibilitas kiosk.
