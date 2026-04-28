@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const projectRoot = process.cwd();
-const vendorDir = resolve(projectRoot, 'app', 'static', 'vendor', 'twilio', 'voice-sdk');
+const vendorDir = resolve(projectRoot, 'frontend', 'src', 'static', 'vendor', 'twilio', 'voice-sdk');
 
 const files = [
   {

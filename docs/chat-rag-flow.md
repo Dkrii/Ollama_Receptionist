@@ -47,7 +47,7 @@ flowchart TD
 
 ### 1. Entry point API
 
-- Route chat ada di [app/api/chat_routes.py](../app/api/chat_routes.py)
+- Route chat ada di [backend/app/modules/chat/routes.py](../backend/app/modules/chat/routes.py)
 - Route meneruskan request ke `ChatAppService`
 - Route menerima `conversation_id` dan tetap kompatibel dengan `history` dari frontend
 
@@ -55,7 +55,7 @@ flowchart TD
 
 File utama:
 
-- [app/knowledge/retrieve.py](../app/knowledge/retrieve.py)
+- [backend/app/modules/knowledge_base/retrieve.py](../backend/app/modules/knowledge_base/retrieve.py)
 
 Yang dilakukan:
 
@@ -70,8 +70,8 @@ Yang dilakukan:
 
 File utama:
 
-- [app/knowledge/chroma.py](../app/knowledge/chroma.py)
-- [app/ai/client.py](../app/ai/client.py)
+- [backend/app/modules/knowledge_base/chroma.py](../backend/app/modules/knowledge_base/chroma.py)
+- [backend/app/ai/client.py](../backend/app/ai/client.py)
 
 Yang dilakukan:
 
@@ -82,7 +82,7 @@ Yang dilakukan:
 
 File utama:
 
-- [app/knowledge/ingest.py](../app/knowledge/ingest.py)
+- [backend/app/modules/knowledge_base/ingest.py](../backend/app/modules/knowledge_base/ingest.py)
 
 Yang dilakukan:
 
@@ -94,7 +94,7 @@ Yang dilakukan:
 
 File utama:
 
-- [app/knowledge/generate.py](../app/knowledge/generate.py)
+- [backend/app/modules/knowledge_base/generate.py](../backend/app/modules/knowledge_base/generate.py)
 
 Yang dilakukan:
 
@@ -107,8 +107,8 @@ Yang dilakukan:
 
 File utama:
 
-- [app/api/chat_service.py](../app/api/chat_service.py)
-- [app/storage/chat_repository.py](../app/storage/chat_repository.py)
+- [backend/app/modules/chat/service.py](../backend/app/modules/chat/service.py)
+- [backend/app/modules/chat/repository.py](../backend/app/modules/chat/repository.py)
 
 Yang dilakukan:
 
