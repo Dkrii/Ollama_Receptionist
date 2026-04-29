@@ -13,7 +13,10 @@ const SESSION_IDLE_MS = 5 * 60 * 1000;
 const FACE_PROFILES_STORAGE_KEY = 'kioskFaceProfiles';
 const FACE_DETECTION_INTERVAL_MS = 180;
 const FACE_LOST_GRACE_MS = 1400;
-const GREETING_COOLDOWN_MS = 12000;
+const FACE_INPUT_ACTIVE_WINDOW_MS = FACE_DETECTION_INTERVAL_MS * 3;
+const GREETING_STABLE_MS = 3000;
+const GREETING_RESET_ABSENCE_MS = 8000;
+const GREETING_COOLDOWN_MS = 30000;
 const FACE_MATCH_THRESHOLD = 0.12;
 const VAD_BASE_THRESHOLD = 0.004;
 const VAD_DYNAMIC_MULTIPLIER = 1.8;
@@ -22,8 +25,10 @@ const VAD_CALIBRATION_MS = 2200;
 const VAD_SPEECH_START_MS = 240;
 const VAD_SILENCE_END_MS = 900;
 const STT_MIN_FINAL_CHARS = 3;
-const VISION_CDN_VERSION = '0.10.14';
-const FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+const FACE_ASSET_BASE_URL = '/static/dev/vendor/mediapipe';
+const FACE_VISION_BUNDLE_URL = `${FACE_ASSET_BASE_URL}/vision_bundle.mjs`;
+const FACE_WASM_BASE_URL = `${FACE_ASSET_BASE_URL}/wasm`;
+const FACE_MODEL_URL = `${FACE_ASSET_BASE_URL}/blaze_face_short_range.tflite`;
 
 
 let currentAvatarState = 'IDLE';
@@ -52,8 +57,9 @@ let lastFaceDetectionRunAt = 0;
 let isFacePresent = false;
 let lastFaceSeenAt = 0;
 let lastGreetingAt = 0;
-let currentVisitorKey = '';
 let greetedInCurrentPresence = false;
+let faceDetectedSinceAt = 0;
+let faceLostSinceAt = 0;
 let latestFaceSignature = null;
 let knownFaceProfiles = [];
 let faceCameraStream = null;
@@ -69,6 +75,7 @@ let vadAnalyser = null;
 let vadDataArray = null;
 let vadMonitorRafId = 0;
 let vadStream = null;
+let isVadReady = false;
 let vadVoiceAboveSince = 0;
 let vadLastVoiceAt = 0;
 let vadSpeechActive = false;
@@ -81,6 +88,7 @@ let vadLastResumeAttemptAt = 0;
 let lastTranscriptPreview = '-';
 let lastAutoSentMessage = '-';
 let lastSttError = '-';
+let lastFaceError = '-';
 let lastVadRms = 0;
 let lastDebugRenderAt = 0;
 let contactFlowState = { stage: 'idle' };
@@ -94,6 +102,79 @@ function setFaceIndicatorState(statusClass, label) {
   faceIndicator.classList.remove('is-searching', 'is-recognized', 'is-unknown', 'is-error');
   faceIndicator.classList.add(statusClass);
   faceIndicatorText.textContent = label;
+  lastFaceError = statusClass === 'is-error' ? (label || 'unknown') : '-';
+}
+
+function reportAudioSubsystemIssue(code, message, error = null) {
+  lastSttError = code || 'unknown';
+  if (error) {
+    console.warn(message, error);
+  } else {
+    console.warn(message);
+  }
+  renderRuntimeDebug(true);
+}
+
+function isSpeechRecognitionSupported() {
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function canAcceptSpeechInput() {
+  return isVadReady && isSpeechRecognitionSupported() && Date.now() >= recognitionFatalBlockedUntil;
+}
+
+function hasFreshFaceDetection(now = Date.now()) {
+  return isFacePresent && (now - lastFaceSeenAt) <= FACE_INPUT_ACTIVE_WINDOW_MS;
+}
+
+function hasStableFacePresence(now = Date.now()) {
+  return isFacePresent && Boolean(faceDetectedSinceAt) && (now - faceDetectedSinceAt) >= GREETING_STABLE_MS;
+}
+
+function isAssistantBusy() {
+  return isSending || isAssistantResponding || isSpeechActive();
+}
+
+function shouldPauseVoiceInput(now = Date.now()) {
+  return !hasStableFacePresence(now) || !hasFreshFaceDetection(now) || isAssistantBusy();
+}
+
+function canRunVoiceInput(now = Date.now()) {
+  return !shouldPauseVoiceInput(now) && canAcceptSpeechInput();
+}
+
+function canEmitGreeting(now = Date.now()) {
+  return hasStableFacePresence(now)
+    && !greetedInCurrentPresence
+    && !isAssistantBusy()
+    && (now - lastGreetingAt) >= GREETING_COOLDOWN_MS;
+}
+
+function resetGreetingPresenceState(resetCooldown = false) {
+  greetedInCurrentPresence = false;
+  if (resetCooldown) {
+    lastGreetingAt = 0;
+  }
+}
+
+function renderFacePresenceState(identity = null, now = Date.now()) {
+  if (!isFacePresent || !hasStableFacePresence(now)) {
+    setFaceIndicatorState('is-searching', 'Mencari wajah...');
+    return;
+  }
+
+  if (identity?.recognized) {
+    setFaceIndicatorState('is-recognized', `Dikenali: ${identity.name}`);
+    return;
+  }
+
+  setFaceIndicatorState('is-unknown', 'Wajah terdeteksi');
+}
+
+function clearRecognitionDraft() {
+  recognitionFinalTranscript = '';
+  lastTranscriptPreview = '-';
+  clearTimeout(recognitionSendTimer);
 }
 
 function distance2D(left, right) {
@@ -253,22 +334,10 @@ function emitSystemGreeting(message) {
 }
 
 function maybeGreetVisitor(identity) {
-  if (isSending || isAssistantResponding || isSpeechActive()) return;
-
   const now = Date.now();
-  const visitorKey = identity.recognized
-    ? `known:${identity.name.toLowerCase()}`
-    : 'unknown';
-
-  if (visitorKey !== currentVisitorKey) {
-    greetedInCurrentPresence = false;
-  }
-
-  if (greetedInCurrentPresence) return;
-  if (now - lastGreetingAt < GREETING_COOLDOWN_MS) return;
+  if (!canEmitGreeting(now)) return;
 
   greetedInCurrentPresence = true;
-  currentVisitorKey = visitorKey;
   lastGreetingAt = now;
 
   emitSystemGreeting(buildGreetingMessage(identity));
@@ -281,11 +350,15 @@ function renderRuntimeDebug(force = false) {
   if (!force && (now - lastDebugRenderAt) < DEBUG_REFRESH_MS) return;
   lastDebugRenderAt = now;
 
-  const speechRecognitionAvailable = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const speechRecognitionAvailable = isSpeechRecognitionSupported();
   const rows = [
     ['FACE', isFacePresent ? 'detected' : 'none'],
+    ['FACE_FRESH', hasFreshFaceDetection() ? 'yes' : 'no'],
+    ['FACE_STABLE', hasStableFacePresence() ? 'yes' : 'no'],
+    ['FACE_ERR', lastFaceError || '-'],
     ['ANIM', currentAvatarState],
     ['RESPONDING', isAssistantResponding ? 'yes' : 'no'],
+    ['AUDIO_READY', canAcceptSpeechInput() ? 'yes' : 'no'],
     ['STT_SUPPORT', speechRecognitionAvailable ? 'yes' : 'no'],
     ['STT_ACTIVE', autoRecognitionActive ? 'yes' : 'no'],
     ['VAD_SPEECH', vadSpeechActive ? 'yes' : 'no'],
@@ -304,7 +377,15 @@ function renderRuntimeDebug(force = false) {
 
 function handleFaceMissing() {
   if (!isFacePresent) {
-    setFaceIndicatorState('is-searching', 'Mencari wajah...');
+    if (!faceLostSinceAt) {
+      faceLostSinceAt = Date.now();
+    }
+    if ((Date.now() - faceLostSinceAt) >= GREETING_RESET_ABSENCE_MS) {
+      resetGreetingPresenceState(true);
+    }
+    renderFacePresenceState();
+    clearRecognitionDraft();
+    stopAutoRecognition(false);
     return;
   }
 
@@ -313,9 +394,10 @@ function handleFaceMissing() {
   }
 
   isFacePresent = false;
-  currentVisitorKey = '';
-  greetedInCurrentPresence = false;
-  setFaceIndicatorState('is-searching', 'Mencari wajah...');
+  faceDetectedSinceAt = 0;
+  faceLostSinceAt = Date.now();
+  renderFacePresenceState();
+  clearRecognitionDraft();
   updateAvatarState();
   if (vadSpeechActive) {
     vadSpeechActive = false;
@@ -326,18 +408,18 @@ function handleFaceMissing() {
 }
 
 function handleFaceDetected(detection) {
+  const now = Date.now();
+  if (!isFacePresent) {
+    faceDetectedSinceAt = now;
+  }
   isFacePresent = true;
-  lastFaceSeenAt = Date.now();
+  lastFaceSeenAt = now;
+  faceLostSinceAt = 0;
   updateAvatarState();
 
   latestFaceSignature = buildFaceSignature(detection);
   const identity = recognizeFaceFromSignature(latestFaceSignature);
-
-  if (identity.recognized) {
-    setFaceIndicatorState('is-recognized', `Dikenali: ${identity.name}`);
-  } else {
-    setFaceIndicatorState('is-unknown', 'Wajah terdeteksi');
-  }
+  renderFacePresenceState(identity, now);
 
   maybeGreetVisitor(identity);
   syncAutoRecognitionState();
@@ -350,7 +432,10 @@ function scheduleRecognitionSend() {
     const transcript = recognitionFinalTranscript.trim();
 
     if (!transcript || transcript.length < STT_MIN_FINAL_CHARS) return;
-    if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive()) return;
+    if (shouldPauseVoiceInput()) {
+      clearRecognitionDraft();
+      return;
+    }
 
     recognitionFinalTranscript = '';
     lastTranscriptPreview = transcript;
@@ -361,7 +446,7 @@ function scheduleRecognitionSend() {
 }
 
 function syncAutoRecognitionState() {
-  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive()) {
+  if (shouldPauseVoiceInput()) {
     stopAutoRecognition(false);
     return;
   }
@@ -371,7 +456,7 @@ function syncAutoRecognitionState() {
 function setupAutoSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    setFaceIndicatorState('is-error', 'Browser tidak mendukung STT');
+    reportAudioSubsystemIssue('unsupported', 'SpeechRecognition browser tidak tersedia');
     return null;
   }
 
@@ -384,18 +469,21 @@ function setupAutoSpeechRecognition() {
 }
 
 function startAutoRecognition() {
-  if (autoRecognitionActive || isSending || isAssistantResponding || isSpeechActive()) return;
-  if (Date.now() < recognitionFatalBlockedUntil) return;
+  if (autoRecognitionActive || isAssistantBusy()) return;
+  if (!canRunVoiceInput()) return;
 
   if (!autoRecognition) {
     autoRecognition = setupAutoSpeechRecognition();
     if (!autoRecognition) {
-      setFaceIndicatorState('is-error', 'STT browser tidak tersedia');
+      updateAvatarState();
+      renderRuntimeDebug(true);
       return;
     }
 
     autoRecognition.onresult = (event) => {
-      if (isAssistantResponding || isSending || isSpeechActive()) {
+      if (shouldPauseVoiceInput()) {
+        clearRecognitionDraft();
+        stopAutoRecognition(false);
         return;
       }
 
@@ -435,23 +523,22 @@ function startAutoRecognition() {
       recognitionShouldSend = false;
 
       const transcript = recognitionFinalTranscript.trim();
-      recognitionFinalTranscript = '';
-      clearTimeout(recognitionSendTimer);
+      clearRecognitionDraft();
 
-      if (shouldSend && transcript.length >= STT_MIN_FINAL_CHARS && !isSending && !isSpeechActive() && isFacePresent) {
+      if (shouldSend && transcript.length >= STT_MIN_FINAL_CHARS && !shouldPauseVoiceInput()) {
         lastAutoSentMessage = transcript;
         await sendMessage(transcript);
       }
       updateAvatarState();
       renderRuntimeDebug(true);
 
-      if (isFacePresent && !isSending && !isAssistantResponding && !isSpeechActive() && Date.now() >= recognitionFatalBlockedUntil) {
+      if (canRunVoiceInput()) {
         setTimeout(() => startAutoRecognition(), 250);
       }
     };
   }
 
-  recognitionFinalTranscript = '';
+  clearRecognitionDraft();
   recognitionShouldSend = false;
   recognitionStopRequested = false;
 
@@ -474,7 +561,7 @@ function stopAutoRecognition(shouldSend = true) {
   recognitionShouldSend = shouldSend;
   recognitionStopRequested = true;
   lastSttError = '-';
-  clearTimeout(recognitionSendTimer);
+  clearRecognitionDraft();
   try {
     autoRecognition.stop();
   } catch (error) {
@@ -547,7 +634,7 @@ function monitorVadLoop() {
   }
 
   const now = performance.now();
-  const shouldPause = !isFacePresent || isSending || isAssistantResponding || isSpeechActive();
+  const shouldPause = shouldPauseVoiceInput();
   if (shouldPause) {
     vadVoiceAboveSince = 0;
     if (vadSpeechActive) {
@@ -610,10 +697,14 @@ async function initVAD() {
     vadCalibrationStartedAt = performance.now();
     vadCalibrationSamples = 0;
     vadCalibrationSum = 0;
+    isVadReady = true;
+    lastSttError = '-';
 
     monitorVadLoop();
+    renderRuntimeDebug(true);
   } catch (error) {
-    setFaceIndicatorState('is-error', 'Izin mikrofon ditolak');
+    isVadReady = false;
+    reportAudioSubsystemIssue('mic-denied', 'Izin mikrofon ditolak atau audio input tidak tersedia', error);
   }
 }
 
@@ -677,9 +768,9 @@ async function initFaceRecognition() {
   await loadKnownFaceProfiles();
 
   try {
-    const vision = await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_CDN_VERSION}`);
+    const vision = await import(FACE_VISION_BUNDLE_URL);
     const resolver = await vision.FilesetResolver.forVisionTasks(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_CDN_VERSION}/wasm`
+      FACE_WASM_BASE_URL
     );
 
     faceDetector = await vision.FaceDetector.createFromOptions(resolver, {
@@ -1053,17 +1144,17 @@ function setAvatarState(state) {
 }
 
 function updateAvatarState() {
-  const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
+  const isSpeaking = isSpeechActive();
+  const isReadyForListening = hasStableFacePresence() && !isAssistantBusy();
+  const isListening = autoRecognitionActive || vadSpeechActive || isReadyForListening;
 
-  if (micWrapper && micWrapper.classList.contains('is-recording')) {
-    setAvatarState('LISTENING');
-  } else if (isSpeaking) {
+  if (isSpeaking) {
     setAvatarState('TALKING');
   } else if (isAssistantResponding) {
     setAvatarState('THINGKING');
   } else if (isSending) {
     setAvatarState('THINGKING');
-  } else if (isFacePresent) {
+  } else if (isListening) {
     setAvatarState('LISTENING');
   } else {
     setAvatarState('IDLE');
