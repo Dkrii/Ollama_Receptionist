@@ -30,9 +30,8 @@ class Settings(BaseModel):
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     ollama_chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:3b")
     ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-    ollama_num_predict: int = int(os.getenv("OLLAMA_NUM_PREDICT", "160"))
-    ollama_num_predict_short: int = int(os.getenv("OLLAMA_NUM_PREDICT_SHORT", "96"))
-    ollama_num_predict_long: int = int(os.getenv("OLLAMA_NUM_PREDICT_LONG", "320"))
+    ollama_num_predict: int = int(os.getenv("OLLAMA_NUM_PREDICT", "128"))
+    ollama_num_predict_short: int = int(os.getenv("OLLAMA_NUM_PREDICT_SHORT", "64"))
     ollama_num_ctx: int = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
     ollama_num_thread: int = int(os.getenv("OLLAMA_NUM_THREAD", "4"))
 
@@ -48,7 +47,7 @@ class Settings(BaseModel):
     rag_score_threshold: float = float(os.getenv("RAG_SCORE_THRESHOLD", "0.72"))
     rag_chunk_size: int = int(os.getenv("RAG_CHUNK_SIZE", "900"))
     rag_chunk_overlap: int = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
-    rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "1600"))
+    rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "1800"))
 
     knowledge_dir: Path = Path(os.getenv("KNOWLEDGE_DIR", "/workspace/knowledge"))
     frontend_src_dir: Path = _frontend_src_dir()
