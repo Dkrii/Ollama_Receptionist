@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
+from storage.sqlite import configure_connection, ensure_sqlite_file
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -40,16 +42,9 @@ def _build_search_where(
 
 class AdminRepository:
     @staticmethod
-    def _configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
-
-    @staticmethod
     def _connect() -> sqlite3.Connection:
         connection = sqlite3.connect(settings.chat_db_path, timeout=5)
-        return AdminRepository._configure_connection(connection)
+        return configure_connection(connection)
 
     @staticmethod
     def _create_contact_messages_table(connection: sqlite3.Connection, table_name: str = "contact_messages") -> None:
@@ -205,9 +200,7 @@ class AdminRepository:
 
     @staticmethod
     def initialize() -> None:
-        settings.chat_db_path.parent.mkdir(parents=True, exist_ok=True)
-        if not settings.chat_db_path.exists():
-            settings.chat_db_path.write_bytes(b"")
+        ensure_sqlite_file(settings.chat_db_path)
 
         with closing(AdminRepository._connect()) as connection, connection:
             contact_messages_table = connection.execute(

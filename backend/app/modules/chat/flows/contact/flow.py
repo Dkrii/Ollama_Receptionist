@@ -1,7 +1,7 @@
 from typing import Any
 
+from shared.text import normalize_text_lower
 from modules.chat.shared.transcript import store_chat_message
-from common.text import normalize_text_lower
 from modules.chat.nlp import (
     detect_conversation_intent,
     extract_department_from_text,

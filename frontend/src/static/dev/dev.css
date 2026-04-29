@@ -5,7 +5,7 @@
   --glass-fill: rgba(186, 200, 214, 0.14);
   --glass-shadow: 0 24px 60px rgba(5, 16, 26, 0.26);
   --stage-top-pad: clamp(28px, 4dvh, 44px);
-  --stage-bottom-pad: clamp(56px, 8dvh, 88px);
+  --stage-bottom-pad: clamp(40px, 5.5dvh, 64px);
   --avatar-height: clamp(600px, 88dvh, 880px);
   --avatar-width: min(54vw, calc(var(--avatar-height) * 0.66));
   --avatar-shift-with-chat: -10vw;
@@ -60,19 +60,7 @@ input {
 .kiosk-logo {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.32);
-  background: rgba(186, 200, 214, 0.22);
-  box-shadow: 0 16px 28px rgba(5, 16, 26, 0.2);
-  color: rgba(242, 247, 255, 0.96);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  justify-content: center;  
 }
 
 .kiosk-face-indicator {
@@ -136,7 +124,7 @@ input {
 .kiosk-bg__image {
   background:
     linear-gradient(108deg, rgba(255, 255, 255, 0.06), transparent 28%),
-    url('/static/dev/models/v2.jpg') center center / cover no-repeat;
+    url('/static/dev/models/background.jpg') center center / cover no-repeat;
   filter: blur(4px) saturate(104%) brightness(0.74);
   transform: scale(1.04);
 }
@@ -618,7 +606,7 @@ input {
 
   .kiosk-stage {
     justify-content: center;
-    padding-bottom: 16vh;
+    padding-bottom: 11vh;
   }
 
   .kiosk-chat-tray {
@@ -649,7 +637,7 @@ input {
 @media (max-width: 720px) {
   :root {
     --stage-top-pad: clamp(18px, 3dvh, 28px);
-    --stage-bottom-pad: clamp(72px, 12dvh, 112px);
+    --stage-bottom-pad: clamp(44px, 8dvh, 80px);
     --avatar-height: clamp(520px, 84dvh, 780px);
     --avatar-width: min(82vw, calc(var(--avatar-height) * 0.64));
     --avatar-shift-with-chat: -3vw;
@@ -660,11 +648,6 @@ input {
     top: 12px;
     left: 12px;
     right: 12px;
-  }
-
-  .kiosk-logo {
-    font-size: 11px;
-    padding: 7px 12px;
   }
 
   .kiosk-face-indicator {
@@ -686,7 +669,7 @@ input {
   }
 
   .kiosk-stage {
-    padding: 8vh 0 16vh;
+    padding: 6vh 0 10vh;
   }
 
   .kiosk-chat-tray {
@@ -742,7 +725,7 @@ input {
   :root {
     --avatar-height: clamp(480px, 72dvh, 820px);
     --avatar-width: min(78vw, calc(var(--avatar-height) * 0.66));
-    --stage-bottom-pad: clamp(28vh, 30dvh, 36vh);
+    --stage-bottom-pad: clamp(12vh, 16dvh, 18vh);
     --avatar-shift-with-chat: 0px;
     --avatar-scale-with-chat: 0.95;
   }
@@ -834,7 +817,7 @@ input {
   :root {
     --avatar-height: clamp(600px, 68dvh, 960px);
     --avatar-width: min(68vw, calc(var(--avatar-height) * 0.66));
-    --stage-bottom-pad: clamp(26vh, 28dvh, 34vh);
+    --stage-bottom-pad: clamp(10vh, 13dvh, 16vh);
   }
 
 }

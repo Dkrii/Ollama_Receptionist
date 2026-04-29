@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Dict
 
 from config import settings
-from modules.knowledge_base.chroma import get_collection, embed_texts
+from infrastructure.chroma import get_collection, embed_texts
 from modules.knowledge_base.documents import list_documents, read_document, build_chunks
 
 

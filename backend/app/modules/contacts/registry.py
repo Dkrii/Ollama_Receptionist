@@ -1,5 +1,5 @@
 from config import settings
-from modules.contacts.messaging.providers import wablas
+from infrastructure import wablas
 
 
 MESSAGING_PROVIDER_REGISTRY = {
