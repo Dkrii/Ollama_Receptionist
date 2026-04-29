@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from contextlib import closing
 
 from config import settings
+from storage.sqlite import configure_connection, ensure_sqlite_file
 
 
 _logger = logging.getLogger(__name__)
@@ -28,26 +29,17 @@ class ChatRepository:
     _available = True
 
     @staticmethod
-    def _configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
-
-    @staticmethod
     def _connect() -> sqlite3.Connection:
         if not ChatRepository._available:
             raise RuntimeError("Chat repository is unavailable")
 
         connection = sqlite3.connect(settings.chat_db_path, timeout=5)
-        return ChatRepository._configure_connection(connection)
+        return configure_connection(connection)
 
     @staticmethod
     def initialize() -> None:
         try:
-            settings.chat_db_path.parent.mkdir(parents=True, exist_ok=True)
-            if not settings.chat_db_path.exists():
-                settings.chat_db_path.write_bytes(b"")
+            ensure_sqlite_file(settings.chat_db_path)
         except Exception as e:
             ChatRepository._available = False
             _logger.exception("chat.sqlite.file_creation_failed error=%s path=%s", e, settings.chat_db_path)

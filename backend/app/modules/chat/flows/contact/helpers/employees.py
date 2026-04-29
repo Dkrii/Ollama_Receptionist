@@ -2,8 +2,8 @@ import logging
 import re
 from difflib import SequenceMatcher
 
+from shared.text import normalize_text_lower
 from modules.chat.nlp import normalize_department
-from common.text import normalize_text_lower
 from modules.contacts.employees import load_employee_directory
 
 

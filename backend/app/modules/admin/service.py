@@ -5,10 +5,10 @@ import shutil
 import requests
 from fastapi import UploadFile
 
+from infrastructure.ai_client import provider_health
+from infrastructure.chroma import get_chroma_client, get_collection
 from modules.admin.repository import AdminRepository
-from ai.client import provider_health
 from config import settings
-from modules.knowledge_base.chroma import get_chroma_client, get_collection
 from modules.knowledge_base.ingest import ingest_knowledge
 from modules.knowledge_base.documents import SUPPORTED_EXTENSIONS, list_documents
 

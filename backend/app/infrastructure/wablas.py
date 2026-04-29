@@ -5,12 +5,49 @@ from typing import Any
 
 from config import settings
 from modules.contacts.messaging.types import ContactMessageDispatchResult
-from modules.contacts.http import post_form, request_timeout
 from modules.contacts.phone import normalize_indonesia_phone, require_contact_phone
 
 
 MESSAGING_PROVIDER_WABLAS = "wablas"
 _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+_http_session = requests.Session()
+
+
+def request_timeout(raw_value: int | str | None, fallback: int = 15) -> int:
+    try:
+        timeout = int(raw_value or fallback)
+    except Exception:
+        timeout = fallback
+    return max(5, timeout)
+
+
+def response_payload(response: requests.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"payload": payload}
+    except Exception:
+        text = (response.text or "").strip()
+        return {"raw_text": text[:1000]}
+
+
+def post_form(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    timeout_seconds: int = 15,
+) -> tuple[requests.Response, dict[str, Any]]:
+    merged_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if headers:
+        merged_headers.update(headers)
+
+    response = _http_session.post(
+        url,
+        data=payload,
+        headers=merged_headers,
+        timeout=max(5, int(timeout_seconds or 15)),
+    )
+    return response, response_payload(response)
 
 
 def missing_wablas_settings() -> list[str]:
@@ -22,10 +59,6 @@ def missing_wablas_settings() -> list[str]:
     if not str(getattr(settings, "wablas_secret_key", "") or "").strip():
         missing.append("WABLAS_SECRET_KEY")
     return missing
-
-
-def is_configured() -> bool:
-    return not missing_wablas_settings()
 
 
 def _resolve_test_target() -> tuple[str, bool]:

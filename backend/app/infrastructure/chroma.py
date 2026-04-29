@@ -2,7 +2,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from functools import lru_cache
 
-from ai.client import embed_text
+from infrastructure.ai_client import embed_text
 from config import settings
 
 

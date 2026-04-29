@@ -1,7 +1,7 @@
 from typing import Iterator
 
-from ai.client import generate_text, stream_text_tokens
 from config import settings
+from infrastructure.ai_client import generate_text, stream_text_tokens
 
 
 FALLBACK_MESSAGE = "Maaf, saya belum bisa memberikan jawaban saat ini."

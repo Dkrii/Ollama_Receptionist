@@ -9,7 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import settings
-from modules.knowledge_base.chroma import build_collection_metadata, get_chroma_client, get_collection
+from infrastructure.chroma import build_collection_metadata, get_chroma_client, get_collection
 from modules.knowledge_base.ingest import ingest_knowledge
 from modules.knowledge_base.documents import list_documents
 from modules.knowledge_base.retrieve import retrieve_context

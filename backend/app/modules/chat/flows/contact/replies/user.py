@@ -1,8 +1,8 @@
 import re
 from typing import Any
 
+from shared.text import normalize_text_lower
 from modules.chat.nlp import normalize_contact_mode
-from common.text import normalize_text_lower
 
 
 _YES_PATTERNS = (

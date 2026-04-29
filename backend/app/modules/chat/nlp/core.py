@@ -2,8 +2,8 @@ import json
 import logging
 from typing import Any
 
-from ai.client import generate_text
 from config import settings
+from infrastructure.ai_client import generate_text
 
 
 _logger = logging.getLogger(__name__)
