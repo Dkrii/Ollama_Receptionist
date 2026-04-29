@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from config import settings
 from infrastructure.chroma import get_collection, embed_texts
-from shared.text import normalize_text
+from shared.utils.text import normalize_text
 
 
 _logger = logging.getLogger(__name__)

@@ -491,6 +491,25 @@ input {
   display: none;
 }
 
+.chat-bubble--user.is-draft {
+  opacity: 0.72;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(228, 240, 255, 0.78);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.chat-bubble--user.is-draft::after {
+  content: '';
+  display: inline-block;
+  width: 0.42em;
+  height: 0.42em;
+  margin-left: 0.55em;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: middle;
+  animation: typingPulse 1.2s infinite ease-in-out;
+}
+
 .typing-dots {
   display: inline-flex;
   align-items: center;

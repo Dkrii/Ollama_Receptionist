@@ -12,7 +12,7 @@ def __getattr__(name: str) -> Any:
     if name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    service = import_module("modules.contacts.messaging.service")
+    service = import_module("modules.contacts.service")
     value = getattr(service, name)
     globals()[name] = value
     return value
