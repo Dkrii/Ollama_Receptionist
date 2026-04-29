@@ -12,5 +12,14 @@ def find_by_id(employee_id: int | str | None) -> EmployeeRecord | None:
     return repository.find_by_id(employee_id)
 
 
-def search_employees(query: str, department_hint: str = "") -> list[EmployeeRecord]:
-    return repository.search_employees(query, department_hint=department_hint)
+def search_employees(
+    query: str,
+    department_hint: str = "",
+    *,
+    limit: int | None = None,
+) -> list[EmployeeRecord]:
+    return repository.search_employees(
+        query,
+        department_hint=department_hint,
+        limit=limit,
+    )

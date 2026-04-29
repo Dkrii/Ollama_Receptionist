@@ -69,13 +69,18 @@ _NO_PATTERNS = (
     r"\bgak\b",
     r"\bno\b",
     r"\bbatal\b",
+    r"\bcancel\b",
+    r"\bstop\b",
+    r"\bberhenti\b",
     r"\bjangan\b",
     r"\btidak jadi\b",
     r"\bga usah\b",
     r"\bnggak usah\b",
 )
 _CANCEL_PATTERNS = (
-    r"^\s*(?:batal|batalkan|tidak jadi|nggak jadi|ga jadi|gak jadi|ga usah|gak usah|nggak usah|jangan jadi)\s*$",
+    r"^\s*(?:batal|batalkan|cancel|stop|berhenti|cukup)(?:\s+(?:dulu|aja|saja|ya|deh))?\s*$",
+    r"^\s*(?:tidak|nggak|ga|gak)\s+(?:jadi|usah|perlu|lanjut|dilanjutkan)(?:\s+(?:dulu|aja|saja|ya|deh))?\s*$",
+    r"^\s*jangan\s+(?:jadi|lanjut|dilanjutkan|hubungi|kontak|sambung|kirim|titip|pesan)(?:\s+.*)?$",
 )
 _CONTINUE_PATTERNS = (
     r"^\s*(?:lanjut|lanjutkan|teruskan|oke lanjut|ok lanjut|ya lanjut|silakan lanjut)\s*$",

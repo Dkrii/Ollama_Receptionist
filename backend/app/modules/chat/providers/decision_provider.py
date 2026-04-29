@@ -24,7 +24,7 @@ from modules.chat.utils.slots import (
     normalize_contact_mode,
     normalize_department,
 )
-from modules.contacts.employees import load_employee_directory
+from modules.tools.registry import get_tool
 
 
 _logger = logging.getLogger(__name__)
@@ -147,12 +147,7 @@ def _name_tokens(value: str) -> list[str]:
     return [token for token in tokens if len(token) >= 3 and token not in _NAME_TOKEN_STOPWORDS]
 
 
-def _load_employee_name_index() -> list[dict[str, Any]]:
-    try:
-        employees = load_employee_directory()
-    except Exception:
-        return []
-
+def _index_employee_name_candidates(employees: list[dict[str, Any]]) -> list[dict[str, Any]]:
     indexed: list[dict[str, Any]] = []
     for employee in employees:
         canonical_name = str(employee.get("nama", "")).strip()
@@ -170,12 +165,20 @@ def _load_employee_name_index() -> list[dict[str, Any]]:
     return indexed
 
 
+def _search_employee_name_index(message: str) -> list[dict[str, Any]]:
+    try:
+        employees = get_tool("employee_directory").search_employees(message, limit=8)
+    except Exception:
+        return []
+    return _index_employee_name_candidates(list(employees or []))
+
+
 def _find_employee_name_reference(message: str, *, allow_single_token: bool) -> str:
     normalized_message = _strip_person_titles(_normalize_message(message)).strip()
     if not normalized_message:
         return ""
 
-    indexed_employees = _load_employee_name_index()
+    indexed_employees = _search_employee_name_index(normalized_message)
     if not indexed_employees:
         return ""
 
@@ -245,10 +248,12 @@ def _message_may_start_contact(message: str) -> bool:
 
     has_contact_verb = _has_contact_or_seeking_verb(normalized)
     has_target_reference = _has_person_or_team_reference(normalized)
-    employee_name_reference = _find_employee_name_reference(
-        normalized,
-        allow_single_token=has_contact_verb,
-    )
+    employee_name_reference = ""
+    if has_contact_verb or _PERSON_REFERENCE_PATTERN.search(normalized) is not None:
+        employee_name_reference = _find_employee_name_reference(
+            normalized,
+            allow_single_token=has_contact_verb,
+        )
     detected_department = extract_department_from_text(normalized)
 
     if _looks_like_info_lookup(normalized) and not employee_name_reference:
@@ -365,9 +370,13 @@ def _post_correct_decision(message: str, result: dict[str, Any]) -> dict[str, An
     normalized = _normalize_message(message)
     detected_dept = extract_department_from_text(normalized)
     has_contact_verb = _has_contact_or_seeking_verb(normalized)
-    employee_name_reference = _find_employee_name_reference(
-        normalized,
-        allow_single_token=has_contact_verb,
+    employee_name_reference = (
+        _find_employee_name_reference(
+            normalized,
+            allow_single_token=has_contact_verb,
+        )
+        if has_contact_verb
+        else ""
     )
 
     if detected_dept:

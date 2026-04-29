@@ -14,19 +14,39 @@ from modules.chat.utils.slots import (
     normalize_department,
     normalize_pending_action,
 )
-from modules.contacts.employees import load_employee_directory
 from modules.contacts.service import dispatch_contact_message
+from modules.tools.registry import get_tool
 
 
 _logger = logging.getLogger(__name__)
 
 
-def _load_employee_directory_safe() -> list[dict]:
+def _search_employee_directory_safe(
+    query: str,
+    *,
+    department_hint: str = "",
+    limit: int = 20,
+) -> list[dict]:
     try:
-        return load_employee_directory()
+        return list(
+            get_tool("employee_directory").search_employees(
+                query,
+                department_hint=department_hint,
+                limit=limit,
+            )
+        )
     except Exception:
-        _logger.exception("chat.employee_directory failed to load")
+        _logger.exception("chat.employee_directory search failed")
         return []
+
+
+def _find_employee_by_id_safe(employee_id: int | str | None) -> dict | None:
+    try:
+        employee = get_tool("employee_directory").find_by_id(employee_id)
+    except Exception:
+        _logger.exception("chat.employee_directory find_by_id failed")
+        return None
+    return dict(employee) if employee else None
 
 
 def _similarity(left: str, right: str) -> float:
@@ -47,23 +67,40 @@ def _score_employee_match(employee: dict, query: str) -> float:
     name = normalize_text_lower(str(employee.get("nama", "")))
     department = normalize_text_lower(str(employee.get("departemen", "")))
     position = normalize_text_lower(str(employee.get("jabatan", "")))
+    searchable_blob = f"{name} {department} {position}"
 
     name_score = _similarity(normalized_query, name)
     name_tokens = name.split()
     token_name_score = max([_similarity(normalized_query, token) for token in name_tokens] or [0.0])
     contains_score = 0.75 if normalized_query in name else 0.0
+    query_tokens = [token for token in normalized_query.split() if len(token) >= 2]
+    employee_tokens = set(searchable_blob.split())
+    token_overlap = sum(1 for token in query_tokens if token in employee_tokens)
+    overlap_score = min(0.78, 0.48 + (token_overlap * 0.12)) if token_overlap else 0.0
     department_score = _similarity(normalized_query, department) * 0.65
     position_score = _similarity(normalized_query, position) * 0.55
 
-    return max(name_score, token_name_score, contains_score, department_score, position_score)
+    return max(
+        name_score,
+        token_name_score,
+        contains_score,
+        overlap_score,
+        department_score,
+        position_score,
+    )
 
 
 def _find_employee_candidates(query: str, department_hint: str = "") -> list[dict]:
-    employees = _load_employee_directory_safe()
-    if not query or not normalize_text_lower(query):
-        return employees
-
     canonical_hint = _normalize_department_label(department_hint)
+    normalized_query = normalize_text_lower(query)
+    if not normalized_query and not canonical_hint:
+        return []
+
+    employees = _search_employee_directory_safe(
+        query,
+        department_hint=canonical_hint,
+        limit=20,
+    )
     scored: list[tuple[dict, float]] = []
     for employee in employees:
         score = _score_employee_match(employee, query)
@@ -115,12 +152,18 @@ def _find_department_candidates(department: str) -> list[dict]:
     if not canonical_department:
         return []
 
-    employees = _load_employee_directory_safe()
-    matches: list[dict] = []
-    for employee in employees:
-        employee_department = _normalize_department_label(str(employee.get("departemen", "")))
-        if employee_department == canonical_department:
-            matches.append(employee)
+    employees = _search_employee_directory_safe(
+        "",
+        department_hint=canonical_department,
+        limit=20,
+    )
+    exact_matches = [
+        employee
+        for employee in employees
+        if _normalize_department_label(str(employee.get("departemen", "")))
+        == canonical_department
+    ]
+    matches = exact_matches or employees
 
     matches.sort(key=lambda item: str(item.get("nama", "")).lower())
     return matches
@@ -129,13 +172,7 @@ def _find_department_candidates(department: str) -> list[dict]:
 def _find_employee_by_id(employee_id: int | None) -> dict | None:
     if not employee_id:
         return None
-    for employee in _load_employee_directory_safe():
-        try:
-            if int(employee.get("id")) == int(employee_id):
-                return employee
-        except Exception:
-            continue
-    return None
+    return _find_employee_by_id_safe(employee_id)
 
 
 def _format_employee_contact_target(employee: dict) -> str:
@@ -143,7 +180,11 @@ def _format_employee_contact_target(employee: dict) -> str:
 
 
 def _format_employee_option_label(employee: dict) -> str:
-    return f"{employee['nama']} ({employee['departemen']})"
+    name = _normalize_message_value(employee.get("nama"), fallback="Nama tidak tersedia")
+    department = _normalize_message_value(employee.get("departemen"), fallback="")
+    position = _normalize_message_value(employee.get("jabatan"), fallback="")
+    details = ", ".join(value for value in (position, department) if value)
+    return f"{name} - {details}" if details else name
 
 
 def _candidate_payload(employee: dict) -> dict[str, Any]:
@@ -164,6 +205,22 @@ def _resolve_candidate_selection(message: str, candidates: list[dict]) -> dict |
     if number_match:
         index = int(number_match.group(1)) - 1
         if 0 <= index < len(candidates):
+            return candidates[index]
+
+    number_words = {
+        "satu": 0,
+        "pertama": 0,
+        "dua": 1,
+        "kedua": 1,
+        "tiga": 2,
+        "ketiga": 2,
+        "empat": 3,
+        "keempat": 3,
+        "lima": 4,
+        "kelima": 4,
+    }
+    for word, index in number_words.items():
+        if re.search(rf"\b(?:nomor|pilih|yang)?\s*{word}\b", stripped) and 0 <= index < len(candidates):
             return candidates[index]
 
     for employee in candidates:
@@ -232,20 +289,20 @@ def _build_pending_action(
 
 
 def _build_disambiguation_prompt(candidates: list[dict], prefix: str) -> str:
-    candidate_names = [
-        _format_employee_option_label(item)
-        for item in candidates
+    candidate_labels = [
+        f"{index}. {_format_employee_option_label(item)}"
+        for index, item in enumerate(candidates, start=1)
         if isinstance(item, dict) and item.get("nama")
     ]
-    if not candidate_names:
-        return prefix + " Silakan sebutkan nama lengkap atau divisi yang Anda maksud."
-    if len(candidate_names) == 1:
-        return prefix + f" Apakah {candidate_names[0]}?"
-    if len(candidate_names) == 2:
-        listed_names = f"{candidate_names[0]} atau {candidate_names[1]}"
-    else:
-        listed_names = ", ".join(candidate_names[:-1]) + f", atau {candidate_names[-1]}"
-    return prefix + f" Apakah {listed_names}?"
+    if not candidate_labels:
+        return prefix + " Sebutkan nama lengkap atau divisi yang Anda maksud."
+
+    options = "\n".join(candidate_labels)
+    return (
+        f"{prefix}\n\n"
+        f"{options}\n\n"
+        "Silakan pilih nomor, atau sebutkan namanya."
+    )
 
 
 def _default_contact_delivery_detail(status: str) -> str:
@@ -435,7 +492,7 @@ def handle_contact_message_turn(
     if not employee and candidates:
         selected = _resolve_candidate_selection(message, candidates)
         if selected:
-            employee = selected
+            employee = _find_employee_by_id(selected.get("id")) or selected
             pending = _build_pending_action(
                 selected=employee,
                 target_kind=str(pending.get("target_kind") or "person"),
