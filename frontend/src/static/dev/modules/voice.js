@@ -1,4 +1,6 @@
 import {
+  BARGE_IN_SPEECH_START_MS,
+  BARGE_IN_TTS_GRACE_MS,
   STT_FATAL_ERROR_CODES,
   STT_FATAL_RETRY_BLOCK_MS,
   STT_MIN_FINAL_CHARS,
@@ -34,11 +36,32 @@ export function createVoiceController({ state, services }) {
   function shouldPauseVoiceInput(now = Date.now()) {
     return !(services.face?.hasStableFacePresence(now) || false)
       || !(services.face?.hasFreshFaceDetection(now) || false)
-      || (services.app?.isAssistantBusy() || false);
+      || (services.app?.isResponseInFlight() || false);
   }
 
   function canRunVoiceInput(now = Date.now()) {
     return !shouldPauseVoiceInput(now) && canAcceptSpeechInput();
+  }
+
+  function markTtsBargeInGraceWindow(now = performance.now()) {
+    state.speech.bargeInBlockedUntil = now + BARGE_IN_TTS_GRACE_MS;
+  }
+
+  function isTtsInGraceWindow(now = performance.now()) {
+    return now < state.speech.bargeInBlockedUntil;
+  }
+
+  function consumeSuppressedTtsEndReset() {
+    const shouldSuppress = state.speech.suppressNextTtsEndReset;
+    state.speech.suppressNextTtsEndReset = false;
+    return shouldSuppress;
+  }
+
+  function suppressNextTtsEndReset() {
+    state.speech.suppressNextTtsEndReset = true;
+    window.setTimeout(() => {
+      state.speech.suppressNextTtsEndReset = false;
+    }, 250);
   }
 
   function clearRecognitionDraft() {
@@ -95,7 +118,12 @@ export function createVoiceController({ state, services }) {
   }
 
   function startAutoRecognition() {
-    if (state.recognition.active || (services.app?.isAssistantBusy() || false)) return;
+    if (
+      state.recognition.active
+      || (services.app?.isResponseInFlight() || false)
+      || isSpeechActive()
+      || isTtsInGraceWindow()
+    ) return;
     if (!canRunVoiceInput()) return;
 
     if (!state.recognition.instance) {
@@ -221,6 +249,25 @@ export function createVoiceController({ state, services }) {
     services.debug?.renderRuntimeDebug(true);
   }
 
+  function interruptAssistantSpeech() {
+    if (!isSpeechActive()) return false;
+
+    state.speech.queue = [];
+    state.speech.isSpeakingQueue = false;
+    state.speech.residualBuffer = '';
+    state.speech.bargeInBlockedUntil = 0;
+    suppressNextTtsEndReset();
+    state.assistant.isAssistantResponding = false;
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    services.app?.updateMicState();
+    services.debug?.renderRuntimeDebug(true);
+    return true;
+  }
+
   function getVadRmsLevel() {
     if (!state.vad.analyser || !state.vad.dataArray) return 0;
     state.vad.analyser.getFloatTimeDomainData(state.vad.dataArray);
@@ -301,6 +348,27 @@ export function createVoiceController({ state, services }) {
     const isVoice = rms >= getVadThreshold();
     services.debug?.renderRuntimeDebug();
 
+    if (isSpeechActive()) {
+      if (!isVoice || isTtsInGraceWindow(now)) {
+        state.vad.voiceAboveSince = 0;
+        return;
+      }
+
+      state.vad.lastVoiceAt = now;
+      if (!state.vad.voiceAboveSince) {
+        state.vad.voiceAboveSince = now;
+      }
+
+      if ((now - state.vad.voiceAboveSince) >= BARGE_IN_SPEECH_START_MS) {
+        interruptAssistantSpeech();
+        state.vad.speechActive = true;
+        state.vad.voiceAboveSince = 0;
+        startAutoRecognition();
+        setTimeout(() => startAutoRecognition(), 120);
+      }
+      return;
+    }
+
     if (isVoice) {
       state.vad.lastVoiceAt = now;
       if (!state.vad.voiceAboveSince) {
@@ -372,34 +440,58 @@ export function createVoiceController({ state, services }) {
       return;
     }
 
+    const hadActiveSpeech = isSpeechActive();
+    state.speech.queue = [];
+    state.speech.isSpeakingQueue = false;
+    state.speech.residualBuffer = '';
+    if (hadActiveSpeech) {
+      suppressNextTtsEndReset();
+    }
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'id-ID';
-    utter.onstart = services.app?.updateMicState;
-    utter.onend = () => {
+    utter.onstart = () => {
+      markTtsBargeInGraceWindow();
       services.app?.updateMicState();
-      services.chatUi?.scheduleConversationReset(0);
-      if (onEnd) {
+    };
+    utter.onend = () => {
+      state.speech.bargeInBlockedUntil = 0;
+      const suppressReset = consumeSuppressedTtsEndReset();
+      services.app?.updateMicState();
+      if (!suppressReset) {
+        services.chatUi?.scheduleConversationReset(0);
+      }
+      if (onEnd && !suppressReset) {
         onEnd();
       }
     };
     utter.onerror = () => {
+      state.speech.bargeInBlockedUntil = 0;
+      const suppressReset = consumeSuppressedTtsEndReset();
       services.app?.updateMicState();
-      services.chatUi?.scheduleConversationReset(0);
-      if (onEnd) {
+      if (!suppressReset) {
+        services.chatUi?.scheduleConversationReset(0);
+      }
+      if (onEnd && !suppressReset) {
         onEnd();
       }
     };
     window.speechSynthesis.speak(utter);
+    markTtsBargeInGraceWindow();
     services.app?.updateMicState();
   }
 
   function resetSpeechQueue() {
+    const hadActiveSpeech = isSpeechActive();
     state.speech.queue = [];
     state.speech.isSpeakingQueue = false;
     state.speech.residualBuffer = '';
+    state.speech.bargeInBlockedUntil = 0;
 
     if (window.speechSynthesis) {
+      if (hadActiveSpeech) {
+        suppressNextTtsEndReset();
+      }
       window.speechSynthesis.cancel();
     }
 
@@ -454,17 +546,30 @@ export function createVoiceController({ state, services }) {
     const next = state.speech.queue.shift();
     const utter = new SpeechSynthesisUtterance(next);
     utter.lang = 'id-ID';
+    utter.onstart = () => {
+      markTtsBargeInGraceWindow();
+      services.app?.updateMicState();
+    };
     utter.onend = () => {
+      state.speech.bargeInBlockedUntil = 0;
+      const suppressReset = consumeSuppressedTtsEndReset();
       state.speech.isSpeakingQueue = false;
       services.app?.updateMicState();
-      drainSpeechQueue();
+      if (!suppressReset) {
+        drainSpeechQueue();
+      }
     };
     utter.onerror = () => {
+      state.speech.bargeInBlockedUntil = 0;
+      const suppressReset = consumeSuppressedTtsEndReset();
       state.speech.isSpeakingQueue = false;
       services.app?.updateMicState();
-      drainSpeechQueue();
+      if (!suppressReset) {
+        drainSpeechQueue();
+      }
     };
     window.speechSynthesis.speak(utter);
+    markTtsBargeInGraceWindow();
   }
 
   return {

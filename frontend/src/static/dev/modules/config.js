@@ -21,6 +21,8 @@ export const VAD_MAX_THRESHOLD = 0.02;
 export const VAD_CALIBRATION_MS = 2200;
 export const VAD_SPEECH_START_MS = 240;
 export const VAD_SILENCE_END_MS = 900;
+export const BARGE_IN_TTS_GRACE_MS = 500;
+export const BARGE_IN_SPEECH_START_MS = 450;
 
 export const STT_MIN_FINAL_CHARS = 3;
 export const STT_FATAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);

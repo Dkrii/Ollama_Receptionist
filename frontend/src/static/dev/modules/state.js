@@ -10,7 +10,9 @@ export function createDevKioskState() {
     speech: {
       queue: [],
       isSpeakingQueue: false,
-      residualBuffer: ''
+      residualBuffer: '',
+      bargeInBlockedUntil: 0,
+      suppressNextTtsEndReset: false
     },
     conversation: {
       history: [],
