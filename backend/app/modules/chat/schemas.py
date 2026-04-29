@@ -19,3 +19,12 @@ class ChatRequest(BaseModel):
         if not v.strip():
             raise ValueError("message tidak boleh kosong")
         return v
+
+
+class PendingAction(BaseModel):
+    type: str = "contact_message"
+    target_employee_id: int | None = None
+    target_label: str = ""
+    confirmed: bool = False
+    visitor_name: str = ""
+    visitor_goal: str = ""

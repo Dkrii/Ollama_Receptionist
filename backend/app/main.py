@@ -8,8 +8,8 @@ from config import settings
 from middleware import RequestLoggerMiddleware
 from modules.admin.repository import AdminRepository
 from modules.admin.routes import router as admin_router
+from modules.chat.controller import router as chat_router
 from modules.chat.repository import ChatRepository
-from modules.chat.routes import router as chat_router
 from modules.web.routes import router as web_router
 
 

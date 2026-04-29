@@ -1,14 +1,16 @@
-import json
 import logging
 import time
-from typing import Any
+from typing import Any, Iterable
 
-from modules.chat.shared.transcript import store_chat_message
+from modules.chat.constants import CHAT_SYSTEM_FALLBACK
+from modules.chat.utils.memory import filter_model_history
+from modules.chat.utils.streaming import ndjson_event
+from modules.chat.utils.transcript import store_chat_message
 from modules.knowledge_base.generate import generate_answer_stream
 from modules.knowledge_base.retrieve import retrieve_context
 
+
 _logger = logging.getLogger(__name__)
-CHAT_SYSTEM_FALLBACK = "Maaf, sistem sedang mengalami gangguan. Silakan coba lagi sebentar."
 
 
 def _build_retrieval_result(message: str, history: list[dict]) -> tuple[dict, float]:
@@ -60,49 +62,50 @@ def _should_fallback_to_unknown(retrieval: dict[str, Any]) -> bool:
     return grounding == "low" and top_coverage <= 0.05 and top_bigram_coverage <= 0.0
 
 
-def handle_rag_flow(
+def answer_knowledge_stream(
     message: str,
+    *,
     conversation_id: str | None,
     history: list[dict] | None,
-    flow_state: dict[str, Any] | None = None,
-):
+    flow_state: dict,
+) -> Iterable[str]:
     started_at = time.perf_counter()
     prior_history = history or []
+    model_history = filter_model_history(prior_history)
 
     store_chat_message(conversation_id, "user", message)
-    retrieval, retrieval_ms = _build_retrieval_result(message, prior_history)
+    retrieval, retrieval_ms = _build_retrieval_result(message, model_history)
 
-    def _events():
+    def _events() -> Iterable[str]:
         collected_tokens: list[str] = []
         try:
-            meta_payload = {
-                "type": "meta",
-                "route": "rag",
-                "flow_state": flow_state or {"stage": "idle"},
+            meta_payload: dict[str, Any] = {
+                "route": "knowledge",
+                "flow_state": flow_state,
             }
             if conversation_id:
                 meta_payload["conversation_id"] = conversation_id
-            yield json.dumps(meta_payload, ensure_ascii=False) + "\n"
+            yield ndjson_event("meta", **meta_payload)
 
             if _should_fallback_to_unknown(retrieval):
                 fallback_answer = "Maaf, saya belum punya informasi pastinya untuk itu. Apakah ada hal lain yang ingin Anda tanyakan?"
                 store_chat_message(conversation_id, "assistant", fallback_answer)
-                yield json.dumps({"type": "token", "value": fallback_answer}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "citations", "value": retrieval["citations"]}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                yield ndjson_event("token", fallback_answer)
+                yield ndjson_event("citations", retrieval.get("citations") or [])
+                yield ndjson_event("done")
                 return
 
             first_token_logged = False
             for token in generate_answer_stream(
                 message,
                 retrieval["context"],
-                history=prior_history,
+                history=model_history,
                 grounding_note=_build_grounding_note(retrieval),
             ):
                 if not first_token_logged and token:
                     first_token_ms = (time.perf_counter() - started_at) * 1000
                     _logger.info(
-                        "chat.stream route=rag conversation_id=%s retrieval_ms=%.1f first_token_ms=%.1f",
+                        "chat.stream route=knowledge conversation_id=%s retrieval_ms=%.1f first_token_ms=%.1f",
                         conversation_id,
                         retrieval_ms,
                         first_token_ms,
@@ -110,24 +113,21 @@ def handle_rag_flow(
                     first_token_logged = True
                 if token:
                     collected_tokens.append(token)
-                yield json.dumps({"type": "token", "value": token}, ensure_ascii=False) + "\n"
+                yield ndjson_event("token", token)
 
             final_answer = "".join(collected_tokens).strip()
             if final_answer:
                 store_chat_message(conversation_id, "assistant", final_answer)
-            yield json.dumps({"type": "citations", "value": retrieval["citations"]}, ensure_ascii=False) + "\n"
-            yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+            yield ndjson_event("citations", retrieval.get("citations") or [])
+            yield ndjson_event("done")
         except Exception:
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             _logger.exception(
-                "chat.stream route=rag failed conversation_id=%s retrieval_ms=%.1f total_ms=%.1f",
+                "chat.stream route=knowledge failed conversation_id=%s retrieval_ms=%.1f total_ms=%.1f",
                 conversation_id,
                 retrieval_ms,
                 elapsed_ms,
             )
-            yield json.dumps(
-                {"type": "error", "value": CHAT_SYSTEM_FALLBACK},
-                ensure_ascii=False,
-            ) + "\n"
+            yield ndjson_event("error", CHAT_SYSTEM_FALLBACK)
 
     return _events()
