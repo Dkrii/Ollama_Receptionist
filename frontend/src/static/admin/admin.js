@@ -52,34 +52,23 @@ const knowledgeState = {
 };
 
 const historyState = {
-  activeTab: 'calls',
+  activeTab: 'messages',
   items: {
-    calls: [],
     messages: []
   },
   loading: {
-    calls: false,
     messages: false
   },
   errors: {
-    calls: '',
     messages: ''
   },
   pagination: {
-    calls: null,
     messages: null
   },
   summary: {
-    calls: null,
     messages: null
   },
   filters: {
-    calls: {
-      page: 1,
-      limit: 10,
-      search: '',
-      status: 'all'
-    },
     messages: {
       page: 1,
       limit: 10,
@@ -90,17 +79,6 @@ const historyState = {
 };
 
 const HISTORY_CONFIG = {
-  calls: {
-    endpoint: '/api/admin/contact-calls',
-    emptyMessage: 'Belum ada riwayat call.',
-    columns: ['Waktu', 'Employee', 'Status', 'Provider', 'Detail'],
-    summaryCards: [
-      { key: 'total', label: 'Total Calls', tone: 'neutral' },
-      { key: 'active', label: 'Active', tone: 'info' },
-      { key: 'no_response', label: 'No Response', tone: 'warning' },
-      { key: 'failed', label: 'Failed', tone: 'danger' }
-    ]
-  },
   messages: {
     endpoint: '/api/admin/contact-messages',
     emptyMessage: 'Belum ada riwayat message.',
@@ -600,7 +578,7 @@ async function triggerReindex() {
 }
 
 function getHistoryTabLabel(tabName) {
-  return tabName === 'messages' ? 'message' : 'call';
+  return 'message';
 }
 
 function getActiveHistoryFilters() {
@@ -645,10 +623,10 @@ function createStatusChip(statusValue) {
 
 function getStatusChipClass(statusValue) {
   const normalized = String(statusValue || '').trim().toLowerCase();
-  if (['connected', 'completed', 'sent', 'accepted'].includes(normalized)) {
+  if (['sent', 'accepted'].includes(normalized)) {
     return 'vr-status-chip--success';
   }
-  if (['queued', 'ringing', 'dialing_employee', 'pending', 'busy', 'no_response'].includes(normalized)) {
+  if (['queued', 'pending'].includes(normalized)) {
     return 'vr-status-chip--warning';
   }
   if (['failed', 'cancelled', 'rejected'].includes(normalized)) {
@@ -722,7 +700,7 @@ function renderHistorySummary() {
 }
 
 function getHistoryStatusValue(item, tabName) {
-  return tabName === 'messages' ? item.delivery_status : item.call_status;
+  return item.delivery_status;
 }
 
 function getFilteredHistoryItems(tabName) {
@@ -769,43 +747,6 @@ function renderHistoryPagination() {
   });
 }
 
-function renderCallHistoryRows(items) {
-  for (const item of items) {
-    const row = document.createElement('tr');
-
-    const timeCell = document.createElement('td');
-    let timeMeta = '';
-    if (item.ended_at) {
-      timeMeta = `Selesai ${formatDateTime(item.ended_at)}`;
-    } else if (item.connected_at) {
-      timeMeta = `Tersambung ${formatDateTime(item.connected_at)}`;
-    }
-    timeCell.appendChild(createStackContent(formatDateTime(item.created_at), timeMeta));
-
-    const employeeCell = document.createElement('td');
-    employeeCell.appendChild(createStackContent(item.employee_nama, item.employee_departemen));
-
-    const statusCell = document.createElement('td');
-    statusCell.appendChild(createStatusChip(item.call_status));
-
-    const providerCell = document.createElement('td');
-    providerCell.appendChild(createStackContent(formatPrimaryText(item.call_provider).toUpperCase()));
-
-    const detailCell = document.createElement('td');
-    detailCell.className = 'vr-history-cell--copy';
-    const detailCopy = document.createElement('div');
-    detailCopy.className = 'vr-history-copy';
-    detailCopy.textContent = formatPrimaryText(item.call_detail);
-    detailCell.appendChild(detailCopy);
-
-    row.appendChild(timeCell);
-    row.appendChild(employeeCell);
-    row.appendChild(statusCell);
-    row.appendChild(providerCell);
-    row.appendChild(detailCell);
-    historyTableBody.appendChild(row);
-  }
-}
 
 function renderMessageHistoryRows(items) {
   for (const item of items) {
@@ -874,11 +815,7 @@ function renderHistoryTable() {
   }
 
   clearHistoryEmptyState();
-  if (tabName === 'messages') {
-    renderMessageHistoryRows(filteredItems);
-  } else {
-    renderCallHistoryRows(filteredItems);
-  }
+  renderMessageHistoryRows(filteredItems);
 }
 
 async function fetchHistoryData(tabName) {
@@ -918,7 +855,7 @@ async function ensureHistoryData(tabName, force = false) {
 }
 
 function activateHistoryTab(tabName) {
-  historyState.activeTab = tabName === 'messages' ? 'messages' : 'calls';
+  historyState.activeTab = 'messages';
 
   for (const button of historyTabButtons) {
     const isActive = button.dataset.historyTab === historyState.activeTab;
@@ -1068,7 +1005,7 @@ if (adminSidebarOverlay) {
 
 for (const historyTabButton of historyTabButtons) {
   historyTabButton.addEventListener('click', () => {
-    activateHistoryTab(historyTabButton.dataset.historyTab || 'calls');
+    activateHistoryTab(historyTabButton.dataset.historyTab || 'messages');
   });
 }
 
@@ -1134,7 +1071,7 @@ if (mobileSidebarQuery && typeof mobileSidebarQuery.addEventListener === 'functi
 (async () => {
   try {
     syncSidebarLayout();
-    activateHistoryTab('calls');
+    activateHistoryTab('messages');
     activateView(getViewFromHash());
     await refreshKnowledgeSummary();
     await ensureKnowledgeDocuments(true);

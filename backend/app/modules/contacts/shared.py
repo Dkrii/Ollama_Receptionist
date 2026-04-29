@@ -5,16 +5,12 @@ from modules.contacts.phone import (
     require_contact_phone,
 )
 from modules.contacts.registry import (
-    get_contact_call_provider,
-    get_contact_call_provider_adapter,
     get_contact_messaging_provider,
     get_contact_messaging_provider_adapter,
     is_supported_messaging_provider,
 )
 
 __all__ = [
-    "get_contact_call_provider",
-    "get_contact_call_provider_adapter",
     "get_contact_messaging_provider",
     "get_contact_messaging_provider_adapter",
     "is_supported_messaging_provider",

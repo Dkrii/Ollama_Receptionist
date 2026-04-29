@@ -383,49 +383,6 @@ class AdminAppService:
         )
 
     @staticmethod
-    def contact_calls(
-        *,
-        page: int = 1,
-        limit: int = 10,
-        search: str = "",
-        status: str = "all",
-    ) -> dict:
-        safe_page = AdminAppService._safe_page(page)
-        safe_limit = AdminAppService._safe_limit(limit)
-        total_items = AdminRepository.count_contact_calls(search=search, status=status)
-        pagination = AdminAppService._build_pagination(
-            page=safe_page,
-            limit=safe_limit,
-            total_items=total_items,
-        )
-        rows = AdminRepository.list_contact_calls(
-            limit=safe_limit,
-            page=int(pagination["page"]),
-            search=search,
-            status=status,
-        )
-        items = [
-            {
-                "id": row["id"],
-                "employee_nama": row["employee_nama"],
-                "employee_departemen": row["employee_departemen"],
-                "call_status": row["call_status"],
-                "call_detail": row["call_detail"],
-                "call_provider": row["call_provider"],
-                "created_at": row["created_at"],
-                "connected_at": row["connected_at"],
-                "ended_at": row["ended_at"],
-            }
-            for row in rows
-        ]
-        return AdminAppService._message_response(
-            "Riwayat call berhasil dimuat",
-            items,
-            pagination=pagination,
-            summary=AdminRepository.contact_calls_summary(),
-        )
-
-    @staticmethod
     def contact_messages(
         *,
         page: int = 1,

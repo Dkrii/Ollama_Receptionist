@@ -74,13 +74,11 @@ def _resolve_contact_mode(
     user_message: str = "",
 ) -> str:
     intent_mode = normalize_contact_mode(intent_result.get("contact_mode"))
-    if intent_mode == "call":
-        return "call"
     if intent_mode == "notify" and _is_explicit_notify_request(user_message):
         return "notify"
 
     if isinstance(flow_state, dict):
         saved = str(flow_state.get("action") or "").strip().lower()
-        if saved in {"call", "notify"}:
+        if saved == "notify":
             return saved
-    return "call"
+    return "notify"

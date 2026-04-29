@@ -12,17 +12,13 @@ from modules.chat.flows.contact.helpers.payloads import (
     _unpack_ctx,
 )
 from modules.chat.flows.contact.replies.receptionist import (
-    _build_call_unavailable_message_answer,
     _build_cancel_contact_answer,
     _build_confirmation_follow_up,
-    _build_contact_request_success_answer,
     _build_contact_response,
     _build_disambiguation_follow_up,
     _build_disambiguation_prompt,
     _build_message_name_follow_up,
     _expired_response,
-    _is_successful_contact_status,
-    _is_unavailable_contact_status,
 )
 from modules.chat.flows.contact.replies.user import _classify_confirmation_reply
 
@@ -107,20 +103,6 @@ def handle_confirmation_stage(ctx: dict) -> dict:
         store_chat_message(conversation_id, "assistant", answer)
         return _build_contact_response(answer=answer, conversation_id=conversation_id, flow_state=_build_stage("idle", flow_context))
 
-    if action == "call" and isinstance(action_result, dict):
-        action_result["fallback_flow_state"] = _build_stage(
-            "await_message_name",
-            flow_context,
-            action=action,
-            selected=selected,
-            target_kind=target_kind,
-            department=department,
-        )
-        action_result["fallback_answer"] = _build_call_unavailable_message_answer(selected)
-        action_result["fallback_follow_up"] = _build_message_name_follow_up(selected)
-
-    request_status = str(action_result.get("status") or "").strip().lower()
-
     if action == "notify":
         answer = (
             f"Baik, saya bantu sampaikan pesan untuk {selected['nama']}. "
@@ -141,39 +123,3 @@ def handle_confirmation_stage(ctx: dict) -> dict:
             follow_up=_build_message_name_follow_up(selected),
             action_result=action_result,
         )
-
-    if _is_unavailable_contact_status(request_status):
-        answer = _build_call_unavailable_message_answer(selected)
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=conversation_id,
-            flow_state=_build_stage(
-                "await_message_name",
-                flow_context,
-                action=action,
-                selected=selected,
-                target_kind=target_kind,
-                department=department,
-            ),
-            follow_up=_build_message_name_follow_up(selected),
-        )
-
-    if _is_successful_contact_status(request_status):
-        answer = _build_contact_request_success_answer(selected, action_result)
-        store_chat_message(conversation_id, "assistant", answer)
-        return _build_contact_response(
-            answer=answer,
-            conversation_id=conversation_id,
-            flow_state=_build_stage("idle", flow_context),
-            action_result=action_result,
-        )
-
-    answer = "Permintaan hubungi belum berhasil diproses. Silakan coba lagi beberapa saat."
-    store_chat_message(conversation_id, "assistant", answer)
-    return _build_contact_response(
-        answer=answer,
-        conversation_id=conversation_id,
-        flow_state=_build_stage("idle", flow_context),
-        action_result=action_result,
-    )

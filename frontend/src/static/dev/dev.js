@@ -1,20 +1,12 @@
 const kioskRoot = document.getElementById('kioskRoot');
 const chatBox = document.getElementById('chatBox');
-const input = document.getElementById('messageInput');
-const sendBtn = document.getElementById('sendBtn');
-const micBtn = document.getElementById('micBtn');
-const micWrapper = document.getElementById('micWrapper');
+const voiceIndicator = document.getElementById('voiceIndicator');
 const avatarEl = document.getElementById('kioskAvatar');
 const debugStatsEl = document.getElementById('debugStats');
 const debugRuntimeEl = document.getElementById('debugRuntime');
 const faceIndicator = document.getElementById('faceIndicator');
 const faceIndicatorText = document.getElementById('faceIndicatorText');
 const faceCamera = document.getElementById('faceCamera');
-const callPanel = document.getElementById('callPanel');
-const callPanelEyebrow = document.getElementById('callPanelEyebrow');
-const callPanelTitle = document.getElementById('callPanelTitle');
-const callPanelStatus = document.getElementById('callPanelStatus');
-const remoteMediaEl = document.getElementById('remoteMedia');
 const CONVERSATION_ID_STORAGE_KEY = 'kioskConversationId';
 const CONVERSATION_ACTIVITY_STORAGE_KEY = 'kioskConversationLastActivity';
 const SESSION_IDLE_MS = 5 * 60 * 1000;
@@ -92,19 +84,6 @@ let lastSttError = '-';
 let lastVadRms = 0;
 let lastDebugRenderAt = 0;
 let contactFlowState = { stage: 'idle' };
-let currentCallSession = null;
-let currentCallConnection = null;
-let currentCallConnected = false;
-let currentCallCompletionHandled = false;
-let currentCallBackendStatus = 'idle';
-let currentCallProvider = '';
-let isStartingTwoWayCall = false;
-let twilioDevice = null;
-let telnyxClient = null;
-let pendingCallAction = null;
-let pendingFollowUp = null;
-let callStatusPollTimer = null;
-let callStartTimeout = null;
 const DEBUG_REFRESH_MS = 180;
 const STT_FATAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);
 const STT_FATAL_RETRY_BLOCK_MS = 8000;
@@ -265,7 +244,7 @@ function emitSystemGreeting(message) {
   activateConversationLayout();
   clearChat();
   const bubble = addBotBubble();
-  bubble.textContent = message;
+  setBubbleText(bubble, message);
   scrollChatToBottom();
   speakText(message);
   if (!window.speechSynthesis) {
@@ -274,7 +253,7 @@ function emitSystemGreeting(message) {
 }
 
 function maybeGreetVisitor(identity) {
-  if (isSending || isAssistantResponding || isSpeechActive() || isCallActive()) return;
+  if (isSending || isAssistantResponding || isSpeechActive()) return;
 
   const now = Date.now();
   const visitorKey = identity.recognized
@@ -307,7 +286,6 @@ function renderRuntimeDebug(force = false) {
     ['FACE', isFacePresent ? 'detected' : 'none'],
     ['ANIM', currentAvatarState],
     ['RESPONDING', isAssistantResponding ? 'yes' : 'no'],
-    ['CALL', currentCallSession ? (currentCallConnected ? 'connected' : 'active') : (isStartingTwoWayCall ? 'starting' : 'idle')],
     ['STT_SUPPORT', speechRecognitionAvailable ? 'yes' : 'no'],
     ['STT_ACTIVE', autoRecognitionActive ? 'yes' : 'no'],
     ['VAD_SPEECH', vadSpeechActive ? 'yes' : 'no'],
@@ -383,7 +361,7 @@ function scheduleRecognitionSend() {
 }
 
 function syncAutoRecognitionState() {
-  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive() || isCallActive()) {
+  if (!isFacePresent || isSending || isAssistantResponding || isSpeechActive()) {
     stopAutoRecognition(false);
     return;
   }
@@ -570,14 +548,6 @@ function monitorVadLoop() {
 
   const now = performance.now();
   const shouldPause = !isFacePresent || isSending || isAssistantResponding || isSpeechActive();
-  if (isCallActive()) {
-    vadVoiceAboveSince = 0;
-    if (vadSpeechActive) {
-      vadSpeechActive = false;
-      stopAutoRecognition(false);
-    }
-    return;
-  }
   if (shouldPause) {
     vadVoiceAboveSince = 0;
     if (vadSpeechActive) {
@@ -826,7 +796,6 @@ function waitForSpeechPlaybackToFinish(onDone) {
 }
 
 function scheduleSessionIdleReset() {
-  if (isCallActive()) return;
   clearTimeout(sessionIdleTimer);
   sessionIdleTimer = setTimeout(() => {
     clearConversationState();
@@ -1124,7 +1093,6 @@ function isSpeechActive() {
 }
 
 function finalizeConversationLayout() {
-  if (isCallActive()) return;
   if (!isSending && !isSpeechActive()) {
     isAssistantResponding = false;
     resetConversationLayout();
@@ -1151,9 +1119,31 @@ function activateConversationLayout() {
 function addBotBubble() {
   const bubble = document.createElement('div');
   bubble.className = 'chat-bubble chat-bubble--bot';
+  const role = document.createElement('span');
+  role.className = 'bubble-role';
+  role.textContent = 'Resepsionis';
+  const textEl = document.createElement('div');
+  textEl.className = 'bubble-text';
+  bubble.appendChild(role);
+  bubble.appendChild(textEl);
+  bubble._textEl = textEl;
   chatBox.appendChild(bubble);
   scrollChatToBottom();
   return bubble;
+}
+
+function setBubbleText(bubble, text) {
+  const el = bubble._textEl || bubble;
+  el.textContent = text;
+}
+
+function addUserBubble(message) {
+  if (!chatBox || !message) return;
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble chat-bubble--user';
+  bubble.textContent = message;
+  chatBox.appendChild(bubble);
+  scrollChatToBottom();
 }
 
 function renderDebugStats(stats = null) {
@@ -1176,724 +1166,13 @@ function renderDebugStats(stats = null) {
   });
 }
 
-function isCallActive() {
-  return Boolean(currentCallSession || isStartingTwoWayCall);
-}
-
-function stopCallStatusPolling() {
-  if (!callStatusPollTimer) return;
-  window.clearInterval(callStatusPollTimer);
-  callStatusPollTimer = null;
-}
-
-function stopCallStartTimeout() {
-  if (!callStartTimeout) return;
-  window.clearTimeout(callStartTimeout);
-  callStartTimeout = null;
-}
-
-function setCallPanelVisible(visible) {
-  if (!callPanel) return;
-  callPanel.hidden = !visible;
-}
-
-function setCallPanelState(mode, title, status, eyebrow = 'Panduan resepsionis') {
-  if (!callPanel || !callPanelTitle || !callPanelStatus || !callPanelEyebrow) return;
-
-  setCallPanelVisible(true);
-  callPanel.classList.remove('is-active', 'is-connected', 'is-failed', 'is-prompt');
-  if (mode === 'active') {
-    callPanel.classList.add('is-active');
-  } else if (mode === 'connected') {
-    callPanel.classList.add('is-active', 'is-connected');
-  } else if (mode === 'failed') {
-    callPanel.classList.add('is-active', 'is-failed');
-  } else if (mode === 'prompt') {
-    callPanel.classList.add('is-prompt');
-  }
-
-  callPanelEyebrow.textContent = eyebrow;
-  callPanelTitle.textContent = title;
-  callPanelStatus.textContent = status;
-}
-
-function resetCallPanel() {
-  if (!callPanel || !callPanelTitle || !callPanelStatus || !callPanelEyebrow) return;
-  callPanel.classList.remove('is-active', 'is-connected', 'is-failed', 'is-prompt');
-  callPanelEyebrow.textContent = 'Panduan resepsionis';
-  callPanelTitle.textContent = 'Belum ada sambungan aktif';
-  callPanelStatus.textContent = 'Panduan singkat dan status sambungan akan tampil di sini saat diperlukan.';
-  setCallPanelVisible(false);
-}
-
-function buildCallPanelTitle(callAction) {
-  return String(callAction?.employee?.nama || 'Sambungan telepon');
-}
-
-function buildCallStatusText(status) {
-  const normalized = String(status || '').trim().toLowerCase();
-  if (normalized === 'preparing') return 'Menyiapkan sambungan';
-  if (normalized === 'dialing_employee') return 'Menghubungi';
-  if (normalized === 'ringing') return 'Berdering';
-  if (normalized === 'connected') return 'Terhubung';
-  if (normalized === 'busy') return 'Sedang sibuk';
-  if (normalized === 'no_response') return 'Tidak merespons';
-  if (normalized === 'failed') return 'Tidak terhubung';
-  if (normalized === 'completed') return 'Panggilan selesai';
-  return 'Menyiapkan sambungan';
-}
-
-function showPromptOverlay(followUp) {
-  if (!followUp || currentCallSession) return;
-
-  const eyebrow = String(followUp.eyebrow || 'Panduan resepsionis').trim() || 'Panduan resepsionis';
-  const title = String(followUp.title || '').trim();
-  const message = String(followUp.message || '').trim();
-  if (!title && !message) return;
-
-  setCallPanelState(
-    'prompt',
-    title || 'Panduan resepsionis',
-    message || 'Silakan lanjutkan dengan jawaban Anda.',
-    eyebrow
-  );
-}
-
-function setCallStatusPanelState(mode, title, status) {
-  setCallPanelState(mode, title, status, 'Sambungan resepsionis');
-}
-
-async function reportCallFailure(callSessionId, status = 'failed', reason = 'client_error') {
-  const normalizedSessionId = String(callSessionId || '').trim();
-  if (!normalizedSessionId) return;
-
-  try {
-    await fetch('/api/contact/call/fail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        call_session_id: normalizedSessionId,
-        status,
-        reason,
-      }),
-    });
-  } catch (error) {
-  }
-}
-
-async function reportClientCallStatus({
-  callSessionId,
-  provider,
-  status,
-  providerCallId = '',
-  providerPayload = null,
-}) {
-  const normalizedSessionId = String(callSessionId || '').trim();
-  const normalizedStatus = String(status || '').trim().toLowerCase();
-  if (!normalizedSessionId || !normalizedStatus) return;
-
-  try {
-    await fetch('/api/contact/call/client-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        call_session_id: normalizedSessionId,
-        provider: String(provider || '').trim().toLowerCase(),
-        status: normalizedStatus,
-        provider_call_id: String(providerCallId || '').trim(),
-        provider_payload: providerPayload,
-      }),
-    });
-  } catch (error) {
-  }
-}
-
-function hasCallAttemptStarted() {
-  const status = String(currentCallBackendStatus || '').trim().toLowerCase();
-  return Boolean(currentCallConnected || (status && status !== 'preparing' && status !== 'idle'));
-}
-
-function suspendAudioForCall() {
-  clearTimeout(conversationResetTimer);
-  clearTimeout(sessionIdleTimer);
-  resetSpeechQueue();
-  isAssistantResponding = false;
-  updateMicState();
-}
-
-async function fetchCallToken(callSessionId) {
-  const response = await fetch(`/api/contact/call/token?call_session_id=${encodeURIComponent(callSessionId)}`);
-  if (!response.ok) {
-    let message = 'Gagal menyiapkan token telepon.';
-    try {
-      const payload = await response.json();
-      message = payload.detail || message;
-    } catch (error) {
-    }
-    throw new Error(message);
-  }
-  const payload = await response.json();
-  console.info('contact.call.token', {
-    provider: payload?.provider || '-',
-    hasToken: Boolean(payload?.token),
-    tokenLength: String(payload?.token || '').length
-  });
-  return payload;
-}
-
-function getCallProviderName(callAction) {
-  return String(callAction?.provider || 'twilio').trim().toLowerCase() || 'twilio';
-}
-
-function normalizeIndonesiaPhoneForDialer(value) {
-  const compact = String(value || '').replace(/[^\d+]/g, '');
-  if (!compact) return '';
-
-  let phone = compact;
-  if (phone.startsWith('+')) {
-    phone = phone.slice(1);
-  }
-
-  if (phone.startsWith('0')) {
-    phone = `62${phone.slice(1)}`;
-  } else if (phone.startsWith('8')) {
-    phone = `62${phone}`;
-  }
-
-  if (!/^\d{10,}$/.test(phone)) {
-    return '';
-  }
-  return `+${phone}`;
-}
-
-function serializeTelnyxCall(call) {
-  if (!call || typeof call !== 'object') return null;
-  return {
-    id: String(call.id || call.callID || call.callId || '').trim(),
-    state: String(call.state || '').trim().toLowerCase(),
-    prev_state: String(call.prevState || call.prev_state || '').trim().toLowerCase(),
-    direction: String(call.direction || '').trim().toLowerCase(),
-    destination_number: String(call.destinationNumber || '').trim(),
-    caller_number: String(call.callerNumber || '').trim(),
-    caller_name: String(call.callerName || '').trim(),
-  };
-}
-
-function getTelnyxCallId(call) {
-  const serialized = serializeTelnyxCall(call) || {};
-  return String(serialized.id || '').trim();
-}
-
-function mapTelnyxCallState(rawState) {
-  const normalized = String(rawState || '').trim().toLowerCase();
-  if (normalized === 'new') return 'preparing';
-  if (normalized === 'requesting' || normalized === 'trying' || normalized === 'recovering') return 'dialing_employee';
-  if (normalized === 'ringing' || normalized === 'answering' || normalized === 'early') return 'ringing';
-  if (normalized === 'active' || normalized === 'held') return 'connected';
-  if (normalized === 'hangup' || normalized === 'destroy' || normalized === 'purge') return 'completed';
-  if (normalized === 'busy' || normalized === 'rejected') return 'busy';
-  if (normalized === 'timeout') return 'no_response';
-  if (normalized === 'failed' || normalized === 'error') return 'failed';
-  return 'failed';
-}
-
-async function refreshTwilioToken() {
-  if (!twilioDevice || !currentCallSession?.call_session_id) return;
-  try {
-    const tokenPayload = await fetchCallToken(currentCallSession.call_session_id);
-    if (!tokenPayload?.token || typeof twilioDevice.updateToken !== 'function') return;
-    await twilioDevice.updateToken(tokenPayload.token);
-  } catch (error) {
-    console.warn('Twilio token refresh gagal', error);
-  }
-}
-
-function cleanupTelnyxClient() {
-  if (!telnyxClient) return;
-  try {
-    if (typeof telnyxClient.disconnect === 'function') {
-      telnyxClient.disconnect();
-    }
-  } catch (error) {
-  }
-  telnyxClient = null;
-}
-
-function cleanupTwilioDevice() {
-  if (!twilioDevice) return;
-  try {
-    if (typeof twilioDevice.destroy === 'function') {
-      twilioDevice.destroy();
-    }
-  } catch (error) {
-  }
-  twilioDevice = null;
-}
-
-async function ensureTwilioDevice(callAction) {
-  if (!window.Twilio?.Device) {
-    console.error('Twilio Voice SDK belum termuat dari asset lokal /static/vendor/twilio/voice-sdk/twilio.min.js');
-    throw new Error('SDK telepon belum termuat. Refresh halaman atau cek asset Twilio lokal.');
-  }
-
-  const tokenPayload = await fetchCallToken(callAction.call_session_id);
-  if (twilioDevice && typeof twilioDevice.destroy === 'function') {
-    try {
-      twilioDevice.destroy();
-    } catch (error) {
-    }
-  }
-
-  twilioDevice = new window.Twilio.Device(tokenPayload.token, {
-    closeProtection: true,
-    logLevel: 1,
-  });
-
-  if (typeof twilioDevice.on === 'function') {
-    twilioDevice.on('error', (error) => {
-      if (!currentCallSession) return;
-      finishActiveCall({
-        mode: 'failed',
-        title: buildCallPanelTitle(currentCallSession),
-        detail: buildCallStatusText('failed'),
-      });
-    });
-    twilioDevice.on('tokenWillExpire', refreshTwilioToken);
-  }
-
-  return twilioDevice;
-}
-
-function handleTelnyxNotification(notification) {
-  if (!currentCallSession || !notification || notification.type !== 'callUpdate') return;
-
-  const call = notification.call || null;
-  if (!call) return;
-
-  currentCallConnection = call;
-  const rawState = String(call.state || '').trim().toLowerCase();
-  const mappedStatus = mapTelnyxCallState(rawState);
-  const providerCallId = getTelnyxCallId(call);
-  const providerPayload = {
-    type: String(notification.type || '').trim(),
-    status: mappedStatus,
-    raw_state: rawState,
-    call: serializeTelnyxCall(call),
-  };
-
-  if (mappedStatus === 'dialing_employee' || mappedStatus === 'ringing') {
-    stopCallStartTimeout();
-    setCallStatusPanelState(
-      'active',
-      buildCallPanelTitle(currentCallSession),
-      buildCallStatusText(mappedStatus)
-    );
-  } else if (mappedStatus === 'connected') {
-    currentCallConnected = true;
-    stopCallStartTimeout();
-    setCallStatusPanelState(
-      'connected',
-      buildCallPanelTitle(currentCallSession),
-      buildCallStatusText('connected')
-    );
-    updateMicState();
-  }
-
-  reportClientCallStatus({
-    callSessionId: currentCallSession.call_session_id,
-    provider: 'telnyx',
-    status: mappedStatus,
-    providerCallId,
-    providerPayload,
-  });
-
-  if (mappedStatus === 'busy' || mappedStatus === 'no_response' || mappedStatus === 'failed') {
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(currentCallSession),
-      detail: buildCallStatusText(mappedStatus),
-    });
-    return;
-  }
-
-  if (mappedStatus === 'completed') {
-    finishActiveCall({
-      mode: currentCallConnected ? 'ended' : 'failed',
-      title: buildCallPanelTitle(currentCallSession),
-      detail: buildCallStatusText(currentCallConnected ? 'completed' : 'failed'),
-    });
-  }
-}
-
-async function ensureTelnyxClient(callAction) {
-  if (!window.TelnyxRTC) {
-    throw new Error('SDK Telnyx belum termuat. Refresh halaman atau cek integrasi SDK Telnyx.');
-  }
-
-  const info = typeof window.TelnyxRTC.webRTCInfo === 'function'
-    ? window.TelnyxRTC.webRTCInfo()
-    : null;
-  if (info && info.supportWebRTC === false) {
-    throw new Error('Browser ini tidak mendukung Telnyx WebRTC.');
-  }
-
-  cleanupTelnyxClient();
-
-  const tokenPayload = await fetchCallToken(callAction.call_session_id);
-  telnyxClient = new window.TelnyxRTC({
-    login_token: tokenPayload.token,
-  });
-
-  if (remoteMediaEl) {
-    telnyxClient.remoteElement = remoteMediaEl.id;
-  }
-
-  return await new Promise((resolve, reject) => {
-    const cleanupListeners = () => {
-      if (!telnyxClient || typeof telnyxClient.off !== 'function') return;
-      telnyxClient.off('telnyx.ready');
-      telnyxClient.off('telnyx.error');
-    };
-
-    telnyxClient.on('telnyx.ready', () => {
-      cleanupListeners();
-      resolve({ client: telnyxClient, tokenPayload });
-    });
-    telnyxClient.on('telnyx.error', (error) => {
-      cleanupListeners();
-      reject(new Error(String(error?.message || 'Telnyx WebRTC gagal diinisialisasi.')));
-    });
-    telnyxClient.on('telnyx.notification', handleTelnyxNotification);
-
-    try {
-      telnyxClient.connect();
-    } catch (error) {
-      cleanupListeners();
-      reject(error);
-    }
-  });
-}
-
-function applyFallbackAfterCall() {
-  if (!currentCallSession?.fallbackFlowState) return;
-  contactFlowState = currentCallSession.fallbackFlowState;
-}
-
-function showCallFallbackMessage(message) {
-  const normalizedMessage = String(message || '').trim();
-  if (!normalizedMessage) return;
-
-  activateConversationLayout();
-  const bubble = addBotBubble();
-  bubble.textContent = normalizedMessage;
-  scrollChatToBottom();
-  appendConversationTurn('assistant', normalizedMessage);
-  speakText(normalizedMessage);
-}
-
-function finishActiveCall({ mode, title, detail }) {
-  if (!currentCallSession || currentCallCompletionHandled) return;
-
-  currentCallCompletionHandled = true;
-  isStartingTwoWayCall = false;
-  stopCallStatusPolling();
-  stopCallStartTimeout();
-  const fallbackAnswer = String(currentCallSession?.fallbackAnswer || '').trim();
-  const fallbackFollowUp = currentCallSession?.fallbackFollowUp || null;
-
-  if (mode === 'connected') {
-    setCallStatusPanelState('connected', title, detail);
-    updateMicState();
-    return;
-  }
-
-  if (mode === 'failed') {
-    setCallStatusPanelState('failed', title, detail);
-    applyFallbackAfterCall();
-    if (fallbackAnswer) {
-      showCallFallbackMessage(fallbackAnswer);
-    }
-  } else {
-    setCallStatusPanelState('idle', title, detail);
-    contactFlowState = { stage: 'idle' };
-  }
-
-  if (currentCallProvider === 'twilio') {
-    cleanupTwilioDevice();
-  } else if (currentCallProvider === 'telnyx') {
-    cleanupTelnyxClient();
-  }
-
-  currentCallSession = null;
-  currentCallConnection = null;
-  currentCallConnected = false;
-  currentCallBackendStatus = 'idle';
-  currentCallProvider = '';
-  resetCallPanel();
-  if (mode === 'failed') {
-    showPromptOverlay(fallbackFollowUp);
-  }
-  updateMicState();
-}
-
-function wireTwilioCallEvents(connection) {
-  if (!connection || typeof connection.on !== 'function' || !currentCallSession) return;
-
-  connection.on('ringing', () => {
-    if (!currentCallSession) return;
-    setCallStatusPanelState(
-      'active',
-      buildCallPanelTitle(currentCallSession),
-      buildCallStatusText('ringing')
-    );
-  });
-
-  connection.on('accept', () => {
-    if (!currentCallSession) return;
-    currentCallConnected = true;
-    stopCallStartTimeout();
-    setCallStatusPanelState(
-      'connected',
-      buildCallPanelTitle(currentCallSession),
-      buildCallStatusText('connected')
-    );
-    updateMicState();
-  });
-
-  connection.on('disconnect', () => {
-    if (!currentCallSession) return;
-    if (!currentCallConnected && !hasCallAttemptStarted()) {
-      return;
-    }
-    const title = currentCallConnected
-      ? buildCallPanelTitle(currentCallSession)
-      : buildCallPanelTitle(currentCallSession);
-    const detail = currentCallConnected
-      ? buildCallStatusText('completed')
-      : buildCallStatusText('failed');
-    if (!currentCallConnected) {
-      reportCallFailure(currentCallSession.call_session_id, 'failed', 'browser_disconnect');
-    }
-    finishActiveCall({
-      mode: currentCallConnected ? 'ended' : 'failed',
-      title,
-      detail,
-    });
-  });
-
-  connection.on('cancel', () => {
-    if (!currentCallSession) return;
-    if (!hasCallAttemptStarted()) {
-      return;
-    }
-    reportCallFailure(currentCallSession.call_session_id, 'failed', 'call_cancelled');
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(currentCallSession),
-      detail: buildCallStatusText('failed'),
-    });
-  });
-
-  connection.on('reject', () => {
-    if (!currentCallSession) return;
-    if (!hasCallAttemptStarted()) {
-      return;
-    }
-    reportCallFailure(currentCallSession.call_session_id, 'busy', 'call_rejected');
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(currentCallSession),
-      detail: buildCallStatusText('busy'),
-    });
-  });
-
-  connection.on('error', (error) => {
-    if (!currentCallSession) return;
-    if (!hasCallAttemptStarted()) {
-      return;
-    }
-    const reason = String(error?.code || error?.message || 'device_error').trim().toLowerCase();
-    reportCallFailure(currentCallSession.call_session_id, 'failed', reason);
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(currentCallSession),
-      detail: buildCallStatusText('failed'),
-    });
-  });
-}
-
-async function fetchCallStatus(callSessionId) {
-  const response = await fetch(`/api/contact/call/status?call_session_id=${encodeURIComponent(callSessionId)}`);
-  if (!response.ok) {
-    throw new Error('Gagal menyinkronkan status panggilan.');
-  }
-  const payload = await response.json();
-  return payload?.call || null;
-}
-
-function applyPolledCallStatus(callRecord) {
-  if (!currentCallSession || !callRecord) return;
-
-  const status = String(callRecord.call_status || '').trim().toLowerCase();
-  currentCallBackendStatus = status || currentCallBackendStatus;
-  const title = buildCallPanelTitle(currentCallSession);
-
-  if (status === 'preparing' || status === 'dialing_employee' || status === 'ringing') {
-    if (status !== 'preparing') {
-      stopCallStartTimeout();
-    }
-    setCallStatusPanelState('active', title, buildCallStatusText(status));
-    return;
-  }
-
-  if (status === 'connected') {
-    currentCallConnected = true;
-    stopCallStartTimeout();
-    setCallStatusPanelState('connected', title, buildCallStatusText(status));
-    updateMicState();
-    return;
-  }
-
-  if (status === 'busy' || status === 'no_response' || status === 'failed') {
-    finishActiveCall({
-      mode: 'failed',
-      title,
-      detail: buildCallStatusText(status),
-    });
-    return;
-  }
-
-  if (status === 'completed') {
-    finishActiveCall({
-      mode: 'ended',
-      title,
-      detail: buildCallStatusText(status),
-    });
-  }
-}
-
-function startCallStatusPolling(callSessionId) {
-  stopCallStatusPolling();
-  if (!callSessionId) return;
-
-  callStatusPollTimer = window.setInterval(async () => {
-    if (!currentCallSession || currentCallCompletionHandled) {
-      stopCallStatusPolling();
-      return;
-    }
-
-    try {
-      const callRecord = await fetchCallStatus(callSessionId);
-      applyPolledCallStatus(callRecord);
-    } catch (error) {
-    }
-  }, 1500);
-}
-
-function startCallConnectTimeout(callAction) {
-  stopCallStartTimeout();
-  callStartTimeout = window.setTimeout(() => {
-    if (!currentCallSession || currentCallCompletionHandled || currentCallConnected) return;
-    reportCallFailure(callAction.call_session_id, 'failed', 'connect_timeout');
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(callAction),
-      detail: buildCallStatusText('failed'),
-    });
-  }, 15000);
-}
-
-async function startTwoWayCall(callAction) {
-  if (!callAction?.call_session_id || !callAction?.employee) return;
-
-  isStartingTwoWayCall = true;
-  currentCallSession = {
-    ...callAction,
-    fallbackFlowState: callAction.fallback_flow_state || null,
-    fallbackAnswer: callAction.fallback_answer || '',
-    fallbackFollowUp: callAction.fallback_follow_up || null,
-  };
-  currentCallConnection = null;
-  currentCallConnected = false;
-  currentCallCompletionHandled = false;
-  currentCallBackendStatus = 'preparing';
-  currentCallProvider = getCallProviderName(callAction);
-
-  suspendAudioForCall();
-  activateConversationLayout();
-  setCallStatusPanelState(
-    'active',
-    buildCallPanelTitle(callAction),
-    buildCallStatusText('preparing')
-  );
-  startCallStatusPolling(callAction.call_session_id);
-  startCallConnectTimeout(callAction);
-
-  try {
-    if (currentCallProvider === 'telnyx') {
-      const { client, tokenPayload } = await ensureTelnyxClient(callAction);
-      const destinationNumber = normalizeIndonesiaPhoneForDialer(callAction?.employee?.nomor_wa || '');
-      if (!destinationNumber) {
-        throw new Error('Nomor telepon karyawan tidak valid untuk Telnyx.');
-      }
-
-      const callerNumber = normalizeIndonesiaPhoneForDialer(tokenPayload?.caller_number || '');
-      const callOptions = { destinationNumber };
-      if (callerNumber) {
-        callOptions.callerNumber = callerNumber;
-      }
-
-      currentCallConnection = client.newCall(callOptions);
-      isStartingTwoWayCall = false;
-      return;
-    }
-
-    if (currentCallProvider !== 'twilio') {
-      throw new Error(`provider_${currentCallProvider || 'unknown'}_not_supported`);
-    }
-
-      const device = await ensureTwilioDevice(callAction);
-      const connection = await device.connect({
-        params: {
-          call_session_id: callAction.call_session_id,
-        },
-      });
-      currentCallConnection = connection;
-      isStartingTwoWayCall = false;
-      wireTwilioCallEvents(connection);
-  } catch (error) {
-    reportCallFailure(
-      callAction.call_session_id,
-      'failed',
-      String(error?.message || 'client_start_failed').trim().toLowerCase().replace(/\s+/g, '_')
-    );
-    if (currentCallProvider === 'telnyx') {
-      cleanupTelnyxClient();
-    }
-    isStartingTwoWayCall = false;
-    finishActiveCall({
-      mode: 'failed',
-      title: buildCallPanelTitle(callAction),
-      detail: buildCallStatusText('failed'),
-    });
-  }
-}
-
 function syncComposerState() {
-  const hasMessage = Boolean(input && input.value.trim());
-
-  if (sendBtn) {
-    sendBtn.disabled = isSending || isCallActive() || !hasMessage;
-  }
-
   updateMicState();
 }
 
 function updateMicState() {
-  const isSpeaking = isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking);
-
-  if (micBtn) {
-    micBtn.disabled = isSending || isAssistantResponding || isSpeaking || isCallActive();
+  if (voiceIndicator) {
+    voiceIndicator.classList.toggle('is-listening', autoRecognitionActive);
   }
 
   updateAvatarState();
@@ -1903,11 +1182,6 @@ function updateMicState() {
 
 function setComposerBusy(busy) {
   isSending = busy;
-
-  if (input) {
-    input.disabled = busy;
-  }
-
   syncComposerState();
 }
 
@@ -2018,24 +1292,20 @@ function drainSpeechQueue() {
 async function renderBotMessageWordByWord(message) {
   activateConversationLayout();
   const bubble = addBotBubble();
-  bubble.textContent = message;
+  setBubbleText(bubble, message);
   scrollChatToBottom();
   scheduleConversationReset(40);
 }
 
 async function sendMessage(messageOverride = '') {
-  if (isSending || isCallActive()) return;
+  if (isSending) return;
 
-  const message = String(messageOverride || (input ? input.value : '')).trim();
+  const message = String(messageOverride || '').trim();
   if (!message) return;
 
   clearChat();
-  if (!currentCallSession) {
-    resetCallPanel();
-  }
-  if (input) {
-    input.value = '';
-  }
+  activateConversationLayout();
+  addUserBubble(message);
   clearTimeout(sessionIdleTimer);
   storeActivityNow();
   isAssistantResponding = true;
@@ -2049,8 +1319,6 @@ async function sendMessage(messageOverride = '') {
   let botBubble = null;
   let finalAnswer = '';
   let streamEventError = '';
-  pendingCallAction = null;
-  pendingFollowUp = null;
 
   const startTime = performance.now();
   let firstTokenTime = null;
@@ -2104,12 +1372,6 @@ async function sendMessage(messageOverride = '') {
             contactFlowState = { stage: 'idle' };
           }
           scheduleSessionIdleReset();
-        } else if (event.type === 'action') {
-          if (event.value && event.value.type === 'start_two_way_call') {
-            pendingCallAction = event.value;
-          }
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value || null;
         } else if (event.type === 'token') {
           const token = event.value || '';
           finalAnswer += token;
@@ -2132,11 +1394,9 @@ async function sendMessage(messageOverride = '') {
               }
             }
 
-            botBubble.textContent = finalAnswer;
+            setBubbleText(botBubble, finalAnswer);
             scrollChatToBottom();
-            if (!pendingCallAction) {
-              enqueueSpeechChunk(token);
-            }
+            enqueueSpeechChunk(token);
           }
         } else if (event.type === 'citations') {
           console.debug('Sumber RAG:', event.value || []);
@@ -2156,12 +1416,6 @@ async function sendMessage(messageOverride = '') {
           } else {
             contactFlowState = { stage: 'idle' };
           }
-        } else if (event.type === 'action') {
-          if (event.value && event.value.type === 'start_two_way_call') {
-            pendingCallAction = event.value;
-          }
-        } else if (event.type === 'follow_up') {
-          pendingFollowUp = event.value || null;
         } else if (event.type === 'citations') {
           console.debug('Sumber RAG:', event.value || []);
         }
@@ -2184,7 +1438,7 @@ async function sendMessage(messageOverride = '') {
       if (!botBubble) {
         botBubble = addBotBubble();
       }
-      botBubble.textContent = finalAnswer;
+      setBubbleText(botBubble, finalAnswer);
       if (thinkingNode && thinkingNode.isConnected) {
         thinkingNode.remove();
       }
@@ -2196,12 +1450,8 @@ async function sendMessage(messageOverride = '') {
       if (thinkingNode && thinkingNode.isConnected) {
         thinkingNode.remove();
       }
-      if (pendingCallAction) {
-        speechResidualBuffer = '';
-      } else {
-        flushSpeechRemainder();
-      }
-      if (!window.speechSynthesis && !pendingCallAction) {
+      flushSpeechRemainder();
+      if (!window.speechSynthesis) {
         scheduleConversationReset(40);
       }
     }
@@ -2209,14 +1459,6 @@ async function sendMessage(messageOverride = '') {
     appendConversationTurn('user', message);
     appendConversationTurn('assistant', finalAnswer);
     scheduleSessionIdleReset();
-
-    if (pendingCallAction) {
-      await startTwoWayCall(pendingCallAction);
-    } else if (pendingFollowUp) {
-      showPromptOverlay(pendingFollowUp);
-    } else if (!currentCallSession) {
-      resetCallPanel();
-    }
   } catch (error) {
     const hasPartialAnswer = Boolean(finalAnswer.trim());
     const fallbackMessage = 'Terjadi kesalahan saat memproses pertanyaan.';
@@ -2234,7 +1476,7 @@ async function sendMessage(messageOverride = '') {
     if (thinkingNode && thinkingNode.isConnected) {
       clearChat();
       const fallbackBubble = addBotBubble();
-      fallbackBubble.textContent = fallbackMessage;
+      setBubbleText(fallbackBubble, fallbackMessage);
       thinkingNode.remove();
       scrollChatToBottom();
     } else {
@@ -2248,25 +1490,7 @@ async function sendMessage(messageOverride = '') {
   } finally {
     setComposerBusy(false);
     syncComposerState();
-    if (input) {
-      input.focus();
-    }
   }
-}
-
-if (sendBtn) {
-  sendBtn.addEventListener('click', sendMessage);
-}
-
-if (input) {
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
-    }
-  });
-
-  input.addEventListener('input', syncComposerState);
 }
 
 if (window.speechSynthesis && typeof window.speechSynthesis.addEventListener === 'function') {
@@ -2275,7 +1499,6 @@ if (window.speechSynthesis && typeof window.speechSynthesis.addEventListener ===
 
 syncComposerState();
 updateAvatarState();
-resetCallPanel();
 preloadAvatarStates();
 hydrateConversationState();
 initFaceRecognition();
