@@ -13,3 +13,5 @@ runtime/*.sqlite3
 runtime/*.sqlite3-shm
 runtime/*.sqlite3-wal
 
+.claude/
+.agents/

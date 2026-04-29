@@ -56,21 +56,6 @@ def knowledge_documents(page: int = 1, limit: int = 10, search: str = "", status
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/admin/contact-calls")
-def contact_calls(page: int = 1, limit: int = 10, search: str = "", status: str = "all"):
-    try:
-        return JSONResponse(
-            AdminAppService.contact_calls(
-                page=page,
-                limit=limit,
-                search=search,
-                status=status,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
 @router.get("/admin/contact-messages")
 def contact_messages(page: int = 1, limit: int = 10, search: str = "", status: str = "all"):
     try:

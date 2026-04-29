@@ -10,7 +10,6 @@ from modules.admin.repository import AdminRepository
 from modules.admin.routes import router as admin_router
 from modules.chat.repository import ChatRepository
 from modules.chat.routes import router as chat_router
-from modules.contacts.routes import router as contact_call_router
 from modules.web.routes import router as web_router
 
 
@@ -38,5 +37,4 @@ app.mount("/static", StaticFiles(directory=str(settings.frontend_src_dir / "stat
 
 app.include_router(web_router)
 app.include_router(chat_router)
-app.include_router(contact_call_router)
 app.include_router(admin_router)
