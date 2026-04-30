@@ -215,6 +215,21 @@ def normalize_pending_action(raw_value: Any) -> dict[str, Any] | None:
     if not isinstance(candidates, list):
         candidates = []
 
+    candidate_ids = raw_value.get("candidate_ids")
+    if not isinstance(candidate_ids, list):
+        candidate_ids = []
+    normalized_candidate_ids: list[int] = []
+    for candidate_id in candidate_ids:
+        try:
+            normalized_candidate_ids.append(int(candidate_id))
+        except Exception:
+            continue
+
+    try:
+        candidate_offset = int(raw_value.get("candidate_offset") or 0)
+    except Exception:
+        candidate_offset = 0
+
     return {
         "type": "contact_message",
         "target_employee_id": normalized_target_id,
@@ -225,6 +240,8 @@ def normalize_pending_action(raw_value: Any) -> dict[str, Any] | None:
         "target_kind": str(raw_value.get("target_kind") or "person").strip().lower(),
         "target_department": str(raw_value.get("target_department") or "").strip(),
         "candidates": candidates,
+        "candidate_ids": normalized_candidate_ids,
+        "candidate_offset": max(0, candidate_offset),
     }
 
 

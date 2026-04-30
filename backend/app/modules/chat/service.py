@@ -10,7 +10,9 @@ from modules.chat.constants import (
 )
 from modules.chat.providers.contact_message_provider import (
     cancel_contact_message,
+    handle_contact_ambiguity_repair,
     has_contact_candidate_selection,
+    has_contact_ambiguity_repair,
     handle_contact_message_turn,
 )
 from modules.chat.providers.decision_provider import decide_next_action
@@ -66,6 +68,17 @@ class ChatAppService:
                 answer=answer,
                 conversation_id=resolved_conversation_id,
                 flow_state=build_flow_state(None),
+                route="contact_message",
+            )
+
+        if pending_action and has_contact_ambiguity_repair(user_message, pending_action):
+            answer, next_pending = handle_contact_ambiguity_repair(user_message, pending_action)
+            store_chat_message(resolved_conversation_id, "user", user_message)
+            store_chat_message(resolved_conversation_id, "assistant", answer)
+            return static_chat_events(
+                answer=answer,
+                conversation_id=resolved_conversation_id,
+                flow_state=build_flow_state(next_pending),
                 route="contact_message",
             )
 

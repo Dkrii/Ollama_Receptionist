@@ -7,6 +7,13 @@ from config import settings
 from shared.utils.text import normalize_text_lower
 from modules.admin.repository import AdminRepository
 from modules.chat.constants import PENDING_ACTION_CONTACT_MESSAGE
+from modules.chat.providers.contact_ambiguity import (
+    CONTACT_AMBIGUITY_MORE_OPTIONS,
+    CONTACT_AMBIGUITY_NEED_HELP,
+    CONTACT_AMBIGUITY_REPEAT_OPTIONS,
+    CONTACT_AMBIGUITY_UNKNOWN,
+    classify_contact_ambiguity_reply,
+)
 from modules.chat.utils.slots import (
     extract_department_from_text,
     extract_visitor_goal,
@@ -22,6 +29,7 @@ from modules.tools.registry import get_tool
 _logger = logging.getLogger(__name__)
 
 MAX_EMPLOYEE_OPTIONS = 3
+MAX_CANDIDATE_SESSION_OPTIONS = 20
 
 
 def _search_employee_directory_safe(
@@ -204,6 +212,20 @@ def _candidate_payload(employee: dict) -> dict[str, Any]:
     }
 
 
+def _candidate_ids(candidates: list[dict] | None) -> list[int]:
+    ids: list[int] = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict) or not candidate.get("id"):
+            continue
+        try:
+            candidate_id = int(candidate["id"])
+        except Exception:
+            continue
+        if candidate_id not in ids:
+            ids.append(candidate_id)
+    return ids[:MAX_CANDIDATE_SESSION_OPTIONS]
+
+
 def _resolve_candidate_selection(message: str, candidates: list[dict]) -> dict | None:
     stripped = normalize_text_lower(message)
     if not stripped:
@@ -284,11 +306,17 @@ def _build_pending_action(
     target_kind: str = "person",
     target_department: str = "",
     candidates: list[dict] | None = None,
+    candidate_ids: list[int] | None = None,
+    candidate_offset: int | None = None,
     confirmed: bool = False,
     visitor_name: str = "",
     visitor_goal: str = "",
 ) -> dict[str, Any]:
     visible_candidates = list(candidates or [])[:MAX_EMPLOYEE_OPTIONS]
+    session_candidate_ids = candidate_ids if candidate_ids is not None else _candidate_ids(candidates)
+    next_candidate_offset = candidate_offset
+    if next_candidate_offset is None:
+        next_candidate_offset = len(visible_candidates) if session_candidate_ids else 0
     return {
         "type": PENDING_ACTION_CONTACT_MESSAGE,
         "target_employee_id": int(selected["id"]) if isinstance(selected, dict) and selected.get("id") else None,
@@ -299,6 +327,8 @@ def _build_pending_action(
         "target_kind": target_kind,
         "target_department": target_department,
         "candidates": [_candidate_payload(candidate) for candidate in visible_candidates],
+        "candidate_ids": list(session_candidate_ids or []),
+        "candidate_offset": max(0, int(next_candidate_offset or 0)),
     }
 
 
@@ -317,6 +347,60 @@ def _build_disambiguation_prompt(candidates: list[dict], prefix: str) -> str:
         f"{options}\n\n"
         "Silakan pilih nomornya, atau sebutkan nama lengkapnya."
     )
+
+
+def _load_candidate_page(candidate_ids: list[int], offset: int) -> tuple[list[dict], int]:
+    page: list[dict] = []
+    next_offset = max(0, offset)
+    for candidate_id in candidate_ids[next_offset:]:
+        next_offset += 1
+        employee = _find_employee_by_id_safe(candidate_id)
+        if employee:
+            page.append(employee)
+        if len(page) >= MAX_EMPLOYEE_OPTIONS:
+            break
+    return page, next_offset
+
+
+def has_contact_ambiguity_repair(message: str, pending_action: dict[str, Any] | None) -> bool:
+    action = classify_contact_ambiguity_reply(message, pending_action)
+    return action != CONTACT_AMBIGUITY_UNKNOWN
+
+
+def handle_contact_ambiguity_repair(
+    message: str,
+    pending_action: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any] | None]:
+    pending = normalize_pending_action(pending_action)
+    if not pending:
+        return "Baik, siapa yang ingin Anda hubungi?", None
+
+    candidates = pending.get("candidates") if isinstance(pending.get("candidates"), list) else []
+    action = classify_contact_ambiguity_reply(message, pending)
+
+    if action == CONTACT_AMBIGUITY_REPEAT_OPTIONS:
+        return _build_disambiguation_prompt(candidates, "Tentu, ini pilihannya lagi."), pending
+    if action == CONTACT_AMBIGUITY_NEED_HELP:
+        return _build_disambiguation_prompt(candidates, "Silakan pilih salah satu dari daftar ini."), pending
+    if action == CONTACT_AMBIGUITY_MORE_OPTIONS:
+        candidate_ids = pending.get("candidate_ids") if isinstance(pending.get("candidate_ids"), list) else []
+        candidate_offset = int(pending.get("candidate_offset") or len(candidates))
+        next_candidates, next_offset = _load_candidate_page(candidate_ids, candidate_offset)
+        if next_candidates:
+            next_pending = {
+                **pending,
+                "candidates": [_candidate_payload(candidate) for candidate in next_candidates],
+                "candidate_offset": next_offset,
+            }
+            return _build_disambiguation_prompt(next_candidates, "Baik, ini pilihan lainnya."), next_pending
+
+        return (
+            "Itu semua kandidat yang paling cocok. "
+            "Kalau belum ada yang sesuai, sebutkan nama lengkap atau divisinya.",
+            pending,
+        )
+
+    return _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mirip. Yang mana yang Anda maksud?"), pending
 
 
 def _build_not_found_answer(target_label: str, target_department: str) -> str:
@@ -568,17 +652,29 @@ def handle_contact_message_turn(
     elif decision.get("intent") == "confirm_no":
         return cancel_contact_message(pending), None
 
-    if not pending.get("visitor_name") and not selected_from_candidates:
+    current_visitor_name = str(pending.get("visitor_name") or "").strip()
+    was_waiting_for_visitor_name = bool(pending.get("confirmed") and not current_visitor_name)
+    was_waiting_for_visitor_goal = bool(
+        pending.get("confirmed")
+        and current_visitor_name
+        and not str(pending.get("visitor_goal") or "").strip()
+    )
+
+    if was_waiting_for_visitor_name and not selected_from_candidates:
         visitor_name = str(decision.get("visitor_name") or "").strip()
         if not visitor_name:
             visitor_name = extract_visitor_name(message, selected_name=str(employee.get("nama") or ""))
         if visitor_name:
             pending["visitor_name"] = visitor_name
+        answer, next_pending = _next_prompt_for_pending(pending, employee)
+        return answer, next_pending
 
-    if pending.get("visitor_name") and not pending.get("visitor_goal"):
+    if was_waiting_for_visitor_goal:
         visitor_goal = str(decision.get("visitor_goal") or "").strip()
-        if not visitor_goal and pending.get("confirmed"):
+        if not visitor_goal:
             visitor_goal = extract_visitor_goal(message)
+        if normalize_text_lower(visitor_goal) == normalize_text_lower(current_visitor_name):
+            visitor_goal = ""
         if visitor_goal:
             pending["visitor_goal"] = visitor_goal
 

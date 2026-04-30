@@ -108,6 +108,47 @@ input {
   box-shadow: 0 0 14px rgba(255, 120, 120, 0.48);
 }
 
+.face-lost-notice {
+  position: absolute;
+  top: 88px;
+  left: 50%;
+  z-index: 12;
+  display: grid;
+  gap: 5px;
+  width: min(420px, calc(100vw - 44px));
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 228, 134, 0.34);
+  border-radius: 22px;
+  background: rgba(17, 31, 41, 0.82);
+  box-shadow: 0 22px 54px rgba(5, 16, 26, 0.38);
+  color: rgba(247, 250, 255, 0.96);
+  text-align: center;
+  transform: translate(-50%, -12px) scale(0.98);
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+
+.face-lost-notice.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.face-lost-notice strong {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.face-lost-notice span {
+  color: rgba(228, 236, 246, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .kiosk-bg {
   position: absolute;
   inset: 0;

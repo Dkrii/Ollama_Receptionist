@@ -13,6 +13,9 @@ import {
 } from "./config.js";
 
 export function createFaceController({ elements, state, services }) {
+  let faceLostNoticeTimer = null;
+  let faceLostNoticeEl = null;
+
   function setFaceIndicatorState(statusClass, label) {
     if (!elements.faceIndicator || !elements.faceIndicatorText) return;
 
@@ -26,6 +29,40 @@ export function createFaceController({ elements, state, services }) {
     elements.faceIndicatorText.textContent = label;
     state.face.lastError =
       statusClass === "is-error" ? label || "unknown" : "-";
+  }
+
+  function getFaceLostNoticeEl() {
+    if (faceLostNoticeEl) return faceLostNoticeEl;
+
+    faceLostNoticeEl = document.createElement("div");
+    faceLostNoticeEl.className = "face-lost-notice";
+    faceLostNoticeEl.setAttribute("role", "status");
+    faceLostNoticeEl.setAttribute("aria-live", "polite");
+    faceLostNoticeEl.innerHTML = `
+      <strong>Wajah tidak terdeteksi</strong>
+      <span>Silakan kembali menghadap kamera untuk melanjutkan.</span>
+    `;
+
+    (elements.kioskRoot || document.body).appendChild(faceLostNoticeEl);
+    return faceLostNoticeEl;
+  }
+
+  function showFaceLostNotice() {
+    const noticeEl = getFaceLostNoticeEl();
+    noticeEl.classList.add("is-visible");
+
+    window.clearTimeout(faceLostNoticeTimer);
+    faceLostNoticeTimer = window.setTimeout(() => {
+      noticeEl.classList.remove("is-visible");
+    }, 10000);
+  }
+
+  function hideFaceLostNotice() {
+    if (!faceLostNoticeEl) return;
+
+    window.clearTimeout(faceLostNoticeTimer);
+    faceLostNoticeTimer = null;
+    faceLostNoticeEl.classList.remove("is-visible");
   }
 
   function hasFreshFaceDetection(now = Date.now()) {
@@ -279,6 +316,7 @@ export function createFaceController({ elements, state, services }) {
     state.face.detectedSinceAt = 0;
     state.face.lostSinceAt = Date.now();
     renderFacePresenceState();
+    showFaceLostNotice();
     services.voice?.clearRecognitionDraft();
     services.avatar?.updateAvatarState();
     if (state.vad.speechActive) {
@@ -297,6 +335,7 @@ export function createFaceController({ elements, state, services }) {
     state.face.isPresent = true;
     state.face.lastSeenAt = now;
     state.face.lostSinceAt = 0;
+    hideFaceLostNotice();
     services.avatar?.updateAvatarState();
 
     state.face.latestSignature = buildFaceSignature(detection);
