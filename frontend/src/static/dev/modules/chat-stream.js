@@ -1,3 +1,81 @@
+const SPOKEN_SUMMARY_MAX_CHARS = 220;
+const DEFAULT_RESET_DELAY_MS = 6000;
+const OPTIONS_RESET_DELAY_MS = 30000;
+const NUMBER_WORDS = {
+  1: 'satu',
+  2: 'dua',
+  3: 'tiga'
+};
+
+function normalizeSpokenText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasNumberedOptions(text) {
+  return countNumberedOptions(text) > 0;
+}
+
+function countNumberedOptions(text) {
+  const numbers = new Set();
+  const matches = String(text || '').matchAll(/(?:^|\n)\s*(\d+)\.\s+/g);
+  for (const match of matches) {
+    const number = Number.parseInt(match[1], 10);
+    if (Number.isInteger(number) && number > 0) {
+      numbers.add(number);
+    }
+  }
+  return numbers.size;
+}
+
+function formatOptionNumberList(count) {
+  const numbers = Array.from({ length: count }, (_, index) => NUMBER_WORDS[index + 1] || String(index + 1));
+  if (numbers.length <= 1) return numbers[0] || '';
+  if (numbers.length === 2) return `${numbers[0]} atau ${numbers[1]}`;
+  return `${numbers.slice(0, -1).join(', ')}, atau ${numbers[numbers.length - 1]}`;
+}
+
+function buildNumberedOptionsSummary(answer) {
+  const optionCount = countNumberedOptions(answer);
+  if (optionCount <= 0) return '';
+  if (optionCount === 1) return 'Saya menemukan satu pilihan. Saya bantu lanjutkan dengan pilihan ini, ya?';
+  return `Saya menemukan ${optionCount} pilihan. Silakan pilih nomor ${formatOptionNumberList(optionCount)}.`;
+}
+
+function limitToWordBoundary(text, maxChars = SPOKEN_SUMMARY_MAX_CHARS) {
+  const normalized = normalizeSpokenText(text);
+  if (normalized.length <= maxChars) return normalized;
+
+  const candidate = normalized.slice(0, maxChars).trimEnd();
+  const lastSpaceIndex = candidate.lastIndexOf(' ');
+  if (lastSpaceIndex < Math.floor(maxChars * 0.6)) return candidate;
+  return candidate.slice(0, lastSpaceIndex).trimEnd();
+}
+
+function firstSentences(text, maxSentences = 2) {
+  const normalized = normalizeSpokenText(text);
+  if (!normalized) return '';
+
+  const matches = normalized.match(/[^.!?]+[.!?]+/g) || [];
+  if (!matches.length) return normalized;
+  return matches.slice(0, maxSentences).join(' ');
+}
+
+function buildSpokenSummary(answer) {
+  const normalized = normalizeSpokenText(answer);
+  if (!normalized) return '';
+  if (hasNumberedOptions(answer)) return buildNumberedOptionsSummary(answer);
+  if (normalized.length <= SPOKEN_SUMMARY_MAX_CHARS) return normalized;
+
+  return limitToWordBoundary(firstSentences(normalized) || normalized);
+}
+
+function getConversationResetDelay(answer) {
+  if (hasNumberedOptions(answer)) return OPTIONS_RESET_DELAY_MS;
+  return DEFAULT_RESET_DELAY_MS;
+}
+
 export function createChatStreamController({ state, services }) {
   async function sendMessage(messageOverride = '', options = {}) {
     if (state.assistant.isSending) return;
@@ -106,7 +184,6 @@ export function createChatStreamController({ state, services }) {
 
               services.chatUi?.setBubbleText(botBubble, finalAnswer);
               services.chatUi?.scrollChatToBottom();
-              services.voice?.enqueueSpeechChunk(token);
             }
           } else if (event.type === 'citations') {
             console.debug('Sumber RAG:', event.value || []);
@@ -148,17 +225,21 @@ export function createChatStreamController({ state, services }) {
         if (thinkingNode && thinkingNode.isConnected) {
           thinkingNode.remove();
         }
-        services.voice?.speakText(finalAnswer);
+        services.voice?.speakText(finalAnswer, {
+          onEnd: () => services.chatUi?.scheduleConversationReset(DEFAULT_RESET_DELAY_MS)
+        });
         if (!window.speechSynthesis) {
-          services.chatUi?.scheduleConversationReset(40);
+          services.chatUi?.scheduleConversationReset(DEFAULT_RESET_DELAY_MS);
         }
       } else {
         if (thinkingNode && thinkingNode.isConnected) {
           thinkingNode.remove();
         }
-        services.voice?.flushSpeechRemainder();
+        services.voice?.speakText(buildSpokenSummary(finalAnswer), {
+          onEnd: () => services.chatUi?.scheduleConversationReset(getConversationResetDelay(finalAnswer))
+        });
         if (!window.speechSynthesis) {
-          services.chatUi?.scheduleConversationReset(40);
+          services.chatUi?.scheduleConversationReset(getConversationResetDelay(finalAnswer));
         }
       }
 
@@ -173,7 +254,9 @@ export function createChatStreamController({ state, services }) {
         if (thinkingNode && thinkingNode.isConnected) {
           thinkingNode.remove();
         }
-        services.voice?.flushSpeechRemainder();
+        services.voice?.speakText(buildSpokenSummary(finalAnswer), {
+          onEnd: () => services.chatUi?.scheduleConversationReset(getConversationResetDelay(finalAnswer))
+        });
         return;
       }
 
@@ -189,9 +272,11 @@ export function createChatStreamController({ state, services }) {
         services.chatUi?.renderBotMessageWordByWord(fallbackMessage);
       }
 
-      services.voice?.speakText(fallbackMessage);
+      services.voice?.speakText(fallbackMessage, {
+        onEnd: () => services.chatUi?.scheduleConversationReset(DEFAULT_RESET_DELAY_MS)
+      });
       if (!window.speechSynthesis) {
-        services.chatUi?.scheduleConversationReset(40);
+        services.chatUi?.scheduleConversationReset(DEFAULT_RESET_DELAY_MS);
       }
     } finally {
       services.app?.setComposerBusy(false);

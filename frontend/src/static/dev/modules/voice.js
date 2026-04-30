@@ -1,6 +1,4 @@
 import {
-  BARGE_IN_SPEECH_START_MS,
-  BARGE_IN_TTS_GRACE_MS,
   STT_FATAL_ERROR_CODES,
   STT_FATAL_RETRY_BLOCK_MS,
   STT_MIN_FINAL_CHARS,
@@ -36,32 +34,12 @@ export function createVoiceController({ state, services }) {
   function shouldPauseVoiceInput(now = Date.now()) {
     return !(services.face?.hasStableFacePresence(now) || false)
       || !(services.face?.hasFreshFaceDetection(now) || false)
-      || (services.app?.isResponseInFlight() || false);
+      || state.assistant.isSending
+      || isSpeechActive();
   }
 
   function canRunVoiceInput(now = Date.now()) {
     return !shouldPauseVoiceInput(now) && canAcceptSpeechInput();
-  }
-
-  function markTtsBargeInGraceWindow(now = performance.now()) {
-    state.speech.bargeInBlockedUntil = now + BARGE_IN_TTS_GRACE_MS;
-  }
-
-  function isTtsInGraceWindow(now = performance.now()) {
-    return now < state.speech.bargeInBlockedUntil;
-  }
-
-  function consumeSuppressedTtsEndReset() {
-    const shouldSuppress = state.speech.suppressNextTtsEndReset;
-    state.speech.suppressNextTtsEndReset = false;
-    return shouldSuppress;
-  }
-
-  function suppressNextTtsEndReset() {
-    state.speech.suppressNextTtsEndReset = true;
-    window.setTimeout(() => {
-      state.speech.suppressNextTtsEndReset = false;
-    }, 250);
   }
 
   function clearRecognitionDraft() {
@@ -120,11 +98,8 @@ export function createVoiceController({ state, services }) {
   function startAutoRecognition() {
     if (
       state.recognition.active
-      || (services.app?.isResponseInFlight() || false)
-      || isSpeechActive()
-      || isTtsInGraceWindow()
+      || shouldPauseVoiceInput()
     ) return;
-    if (!canRunVoiceInput()) return;
 
     if (!state.recognition.instance) {
       state.recognition.instance = setupAutoSpeechRecognition();
@@ -249,25 +224,6 @@ export function createVoiceController({ state, services }) {
     services.debug?.renderRuntimeDebug(true);
   }
 
-  function interruptAssistantSpeech() {
-    if (!isSpeechActive()) return false;
-
-    state.speech.queue = [];
-    state.speech.isSpeakingQueue = false;
-    state.speech.residualBuffer = '';
-    state.speech.bargeInBlockedUntil = 0;
-    suppressNextTtsEndReset();
-    state.assistant.isAssistantResponding = false;
-
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-
-    services.app?.updateMicState();
-    services.debug?.renderRuntimeDebug(true);
-    return true;
-  }
-
   function getVadRmsLevel() {
     if (!state.vad.analyser || !state.vad.dataArray) return 0;
     state.vad.analyser.getFloatTimeDomainData(state.vad.dataArray);
@@ -348,27 +304,6 @@ export function createVoiceController({ state, services }) {
     const isVoice = rms >= getVadThreshold();
     services.debug?.renderRuntimeDebug();
 
-    if (isSpeechActive()) {
-      if (!isVoice || isTtsInGraceWindow(now)) {
-        state.vad.voiceAboveSince = 0;
-        return;
-      }
-
-      state.vad.lastVoiceAt = now;
-      if (!state.vad.voiceAboveSince) {
-        state.vad.voiceAboveSince = now;
-      }
-
-      if ((now - state.vad.voiceAboveSince) >= BARGE_IN_SPEECH_START_MS) {
-        interruptAssistantSpeech();
-        state.vad.speechActive = true;
-        state.vad.voiceAboveSince = 0;
-        startAutoRecognition();
-        setTimeout(() => startAutoRecognition(), 120);
-      }
-      return;
-    }
-
     if (isVoice) {
       state.vad.lastVoiceAt = now;
       if (!state.vad.voiceAboveSince) {
@@ -428,7 +363,7 @@ export function createVoiceController({ state, services }) {
   }
 
   function isSpeechActive() {
-    return Boolean(state.speech.isSpeakingQueue || (window.speechSynthesis && window.speechSynthesis.speaking));
+    return Boolean(state.speech.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking));
   }
 
   function speakText(text, options = {}) {
@@ -440,136 +375,42 @@ export function createVoiceController({ state, services }) {
       return;
     }
 
-    const hadActiveSpeech = isSpeechActive();
-    state.speech.queue = [];
-    state.speech.isSpeakingQueue = false;
-    state.speech.residualBuffer = '';
-    if (hadActiveSpeech) {
-      suppressNextTtsEndReset();
-    }
+    stopAutoRecognition(false);
+    state.speech.isSpeaking = true;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'id-ID';
     utter.onstart = () => {
-      markTtsBargeInGraceWindow();
+      state.speech.isSpeaking = true;
+      stopAutoRecognition(false);
       services.app?.updateMicState();
     };
     utter.onend = () => {
-      state.speech.bargeInBlockedUntil = 0;
-      const suppressReset = consumeSuppressedTtsEndReset();
+      state.speech.isSpeaking = false;
       services.app?.updateMicState();
-      if (!suppressReset) {
-        services.chatUi?.scheduleConversationReset(0);
-      }
-      if (onEnd && !suppressReset) {
+      if (onEnd) {
         onEnd();
       }
     };
     utter.onerror = () => {
-      state.speech.bargeInBlockedUntil = 0;
-      const suppressReset = consumeSuppressedTtsEndReset();
+      state.speech.isSpeaking = false;
       services.app?.updateMicState();
-      if (!suppressReset) {
-        services.chatUi?.scheduleConversationReset(0);
-      }
-      if (onEnd && !suppressReset) {
+      if (onEnd) {
         onEnd();
       }
     };
     window.speechSynthesis.speak(utter);
-    markTtsBargeInGraceWindow();
     services.app?.updateMicState();
   }
 
   function resetSpeechQueue() {
-    const hadActiveSpeech = isSpeechActive();
-    state.speech.queue = [];
-    state.speech.isSpeakingQueue = false;
-    state.speech.residualBuffer = '';
-    state.speech.bargeInBlockedUntil = 0;
+    state.speech.isSpeaking = false;
 
     if (window.speechSynthesis) {
-      if (hadActiveSpeech) {
-        suppressNextTtsEndReset();
-      }
       window.speechSynthesis.cancel();
     }
 
     services.app?.updateMicState();
-  }
-
-  function enqueueSpeechChunk(text) {
-    if (!text || !window.speechSynthesis) return;
-
-    state.speech.residualBuffer += text;
-    const parts = state.speech.residualBuffer.split(/(?<=[.!?])\s+/);
-    state.speech.residualBuffer = parts.pop() || '';
-
-    for (const sentence of parts) {
-      const clean = sentence.trim();
-      if (clean) {
-        state.speech.queue.push(clean);
-      }
-    }
-
-    if (!state.speech.isSpeakingQueue) {
-      drainSpeechQueue();
-    }
-  }
-
-  function flushSpeechRemainder() {
-    const tail = state.speech.residualBuffer.trim();
-    state.speech.residualBuffer = '';
-
-    if (tail) {
-      state.speech.queue.push(tail);
-    }
-
-    if (!state.speech.isSpeakingQueue) {
-      drainSpeechQueue();
-    }
-  }
-
-  function drainSpeechQueue() {
-    if (!window.speechSynthesis) return;
-    if (!state.speech.queue.length) {
-      state.speech.isSpeakingQueue = false;
-      services.app?.updateMicState();
-      services.chatUi?.scheduleConversationReset(0);
-      return;
-    }
-    if (state.speech.isSpeakingQueue) return;
-
-    state.speech.isSpeakingQueue = true;
-    services.app?.updateMicState();
-
-    const next = state.speech.queue.shift();
-    const utter = new SpeechSynthesisUtterance(next);
-    utter.lang = 'id-ID';
-    utter.onstart = () => {
-      markTtsBargeInGraceWindow();
-      services.app?.updateMicState();
-    };
-    utter.onend = () => {
-      state.speech.bargeInBlockedUntil = 0;
-      const suppressReset = consumeSuppressedTtsEndReset();
-      state.speech.isSpeakingQueue = false;
-      services.app?.updateMicState();
-      if (!suppressReset) {
-        drainSpeechQueue();
-      }
-    };
-    utter.onerror = () => {
-      state.speech.bargeInBlockedUntil = 0;
-      const suppressReset = consumeSuppressedTtsEndReset();
-      state.speech.isSpeakingQueue = false;
-      services.app?.updateMicState();
-      if (!suppressReset) {
-        drainSpeechQueue();
-      }
-    };
-    window.speechSynthesis.speak(utter);
-    markTtsBargeInGraceWindow();
   }
 
   return {
@@ -586,8 +427,6 @@ export function createVoiceController({ state, services }) {
     initVAD,
     isSpeechActive,
     speakText,
-    resetSpeechQueue,
-    enqueueSpeechChunk,
-    flushSpeechRemainder
+    resetSpeechQueue
   };
 }

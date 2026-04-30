@@ -4,6 +4,9 @@ from modules.tools.employee_directory import repository
 from modules.tools.employee_directory.schemas import EmployeeRecord
 
 
+DEFAULT_SEARCH_LIMIT = 3
+
+
 def list_employees() -> list[EmployeeRecord]:
     return repository.list_employees()
 
@@ -21,5 +24,5 @@ def search_employees(
     return repository.search_employees(
         query,
         department_hint=department_hint,
-        limit=limit,
+        limit=limit if limit is not None else DEFAULT_SEARCH_LIMIT,
     )

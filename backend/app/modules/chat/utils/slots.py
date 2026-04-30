@@ -2,54 +2,7 @@ import re
 from typing import Any
 
 from shared.utils.text import normalize_text_lower
-
-
-_DEPARTMENT_ALIAS_MAP: dict[str, str] = {
-    "it": "IT",
-    "ti": "IT",
-    "teknologi informasi": "IT",
-    "informatika": "IT",
-    "sistem": "IT",
-    "komputer": "IT",
-    "teknis": "IT",
-    "information technology": "IT",
-    "hr": "HR",
-    "hrd": "HR",
-    "human resource": "HR",
-    "human resources": "HR",
-    "human capital": "HR",
-    "hc": "HR",
-    "sdm": "HR",
-    "sumber daya manusia": "HR",
-    "personalia": "HR",
-    "kepegawaian": "HR",
-    "finance": "Finance",
-    "keuangan": "Finance",
-    "akuntansi": "Finance",
-    "accounting": "Finance",
-    "akunting": "Finance",
-    "marketing": "Marketing",
-    "pemasaran": "Marketing",
-    "promosi": "Marketing",
-    "ga": "GA",
-    "general affairs": "GA",
-    "general affair": "GA",
-    "umum": "GA",
-    "bagian umum": "GA",
-    "legal": "Legal",
-    "hukum": "Legal",
-    "procurement": "Procurement",
-    "pengadaan": "Procurement",
-    "produksi": "Produksi",
-    "production": "Produksi",
-    "operasional": "Operasional",
-    "operations": "Operasional",
-    "security": "Security",
-    "keamanan": "Security",
-    "satpam": "Security",
-}
-
-KNOWN_DEPARTMENTS: set[str] = set(_DEPARTMENT_ALIAS_MAP.values())
+from modules.tools.employee_directory.departments import KNOWN_DEPARTMENTS, normalize_department
 
 _YES_PATTERNS = (
     r"\bya\b",
@@ -81,9 +34,6 @@ _CANCEL_PATTERNS = (
     r"^\s*(?:batal|batalkan|cancel|stop|berhenti|cukup)(?:\s+(?:dulu|aja|saja|ya|deh))?\s*$",
     r"^\s*(?:tidak|nggak|ga|gak)\s+(?:jadi|usah|perlu|lanjut|dilanjutkan)(?:\s+(?:dulu|aja|saja|ya|deh))?\s*$",
     r"^\s*jangan\s+(?:jadi|lanjut|dilanjutkan|hubungi|kontak|sambung|kirim|titip|pesan)(?:\s+.*)?$",
-)
-_CONTINUE_PATTERNS = (
-    r"^\s*(?:lanjut|lanjutkan|teruskan|oke lanjut|ok lanjut|ya lanjut|silakan lanjut)\s*$",
 )
 _NAME_PREFIX_PATTERNS = (
     r"^(?:nama saya|saya bernama|perkenalkan saya)\s+(.+)$",
@@ -143,25 +93,6 @@ def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text) for pattern in patterns)
 
 
-def normalize_department(value: str) -> str:
-    normalized = _normalize_message(value)
-    if not normalized:
-        return ""
-
-    if normalized in _DEPARTMENT_ALIAS_MAP:
-        return _DEPARTMENT_ALIAS_MAP[normalized]
-
-    for alias, canonical in _DEPARTMENT_ALIAS_MAP.items():
-        if re.search(rf"\b{re.escape(alias)}\b", normalized):
-            return canonical
-
-    compact = normalized.replace(" ", "")
-    if compact in {"it", "hr", "hrd", "hc", "ga"}:
-        return _DEPARTMENT_ALIAS_MAP.get(compact, compact.upper())
-
-    return str(value or "").strip()
-
-
 def extract_department_from_text(text: str) -> str | None:
     normalized = _normalize_message(text)
     if not normalized:
@@ -178,9 +109,9 @@ def extract_department_from_text(text: str) -> str | None:
         if canonical and canonical in KNOWN_DEPARTMENTS:
             return canonical
 
-    for alias, canonical in sorted(_DEPARTMENT_ALIAS_MAP.items(), key=lambda item: -len(item[0])):
-        if re.search(rf"\b{re.escape(alias)}\b", normalized):
-            return canonical
+    canonical = normalize_department(normalized)
+    if canonical in KNOWN_DEPARTMENTS:
+        return canonical
 
     return None
 
@@ -210,11 +141,6 @@ def classify_confirmation_reply(message: str) -> str:
 def is_cancel_message(message: str) -> bool:
     normalized = normalize_text_lower(message)
     return bool(normalized and _matches_any_pattern(normalized, _CANCEL_PATTERNS))
-
-
-def is_continue_message(message: str) -> bool:
-    normalized = normalize_text_lower(message)
-    return bool(normalized and _matches_any_pattern(normalized, _CONTINUE_PATTERNS))
 
 
 def _clean_name_candidate(value: str) -> str:

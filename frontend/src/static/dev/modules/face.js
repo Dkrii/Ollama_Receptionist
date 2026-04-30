@@ -9,34 +9,47 @@ import {
   FACE_WASM_BASE_URL,
   GREETING_COOLDOWN_MS,
   GREETING_RESET_ABSENCE_MS,
-  GREETING_STABLE_MS
-} from './config.js';
+  GREETING_STABLE_MS,
+} from "./config.js";
 
 export function createFaceController({ elements, state, services }) {
   function setFaceIndicatorState(statusClass, label) {
     if (!elements.faceIndicator || !elements.faceIndicatorText) return;
 
-    elements.faceIndicator.classList.remove('is-searching', 'is-recognized', 'is-unknown', 'is-error');
+    elements.faceIndicator.classList.remove(
+      "is-searching",
+      "is-recognized",
+      "is-unknown",
+      "is-error",
+    );
     elements.faceIndicator.classList.add(statusClass);
     elements.faceIndicatorText.textContent = label;
-    state.face.lastError = statusClass === 'is-error' ? (label || 'unknown') : '-';
+    state.face.lastError =
+      statusClass === "is-error" ? label || "unknown" : "-";
   }
 
   function hasFreshFaceDetection(now = Date.now()) {
-    return state.face.isPresent && (now - state.face.lastSeenAt) <= FACE_INPUT_ACTIVE_WINDOW_MS;
+    return (
+      state.face.isPresent &&
+      now - state.face.lastSeenAt <= FACE_INPUT_ACTIVE_WINDOW_MS
+    );
   }
 
   function hasStableFacePresence(now = Date.now()) {
-    return state.face.isPresent
-      && Boolean(state.face.detectedSinceAt)
-      && (now - state.face.detectedSinceAt) >= GREETING_STABLE_MS;
+    return (
+      state.face.isPresent &&
+      Boolean(state.face.detectedSinceAt) &&
+      now - state.face.detectedSinceAt >= GREETING_STABLE_MS
+    );
   }
 
   function canEmitGreeting(now = Date.now()) {
-    return hasStableFacePresence(now)
-      && !state.face.greetedInCurrentPresence
-      && !(services.app?.isAssistantBusy() || false)
-      && (now - state.face.lastGreetingAt) >= GREETING_COOLDOWN_MS;
+    return (
+      hasStableFacePresence(now) &&
+      !state.face.greetedInCurrentPresence &&
+      !(services.app?.isAssistantBusy() || false) &&
+      now - state.face.lastGreetingAt >= GREETING_COOLDOWN_MS
+    );
   }
 
   function resetGreetingPresenceState(resetCooldown = false) {
@@ -48,23 +61,23 @@ export function createFaceController({ elements, state, services }) {
 
   function renderFacePresenceState(identity = null, now = Date.now()) {
     if (!state.face.isPresent || !hasStableFacePresence(now)) {
-      setFaceIndicatorState('is-searching', 'Mencari wajah...');
+      setFaceIndicatorState("is-searching", "Mencari wajah...");
       return;
     }
 
     if (identity?.recognized) {
-      setFaceIndicatorState('is-recognized', `Dikenali: ${identity.name}`);
+      setFaceIndicatorState("is-recognized", `Dikenali: ${identity.name}`);
       return;
     }
 
-    setFaceIndicatorState('is-unknown', 'Wajah terdeteksi');
+    setFaceIndicatorState("is-unknown", "Wajah terdeteksi");
   }
 
   function distance2D(left, right) {
     if (!left || !right) return 0;
     const dx = Number(left.x || 0) - Number(right.x || 0);
     const dy = Number(left.y || 0) - Number(right.y || 0);
-    return Math.sqrt((dx * dx) + (dy * dy));
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   function buildFaceSignature(detection) {
@@ -83,7 +96,7 @@ export function createFaceController({ elements, state, services }) {
 
     const centerEye = {
       x: (Number(leftEye.x || 0) + Number(rightEye.x || 0)) / 2,
-      y: (Number(leftEye.y || 0) + Number(rightEye.y || 0)) / 2
+      y: (Number(leftEye.y || 0) + Number(rightEye.y || 0)) / 2,
     };
 
     return [
@@ -92,19 +105,23 @@ export function createFaceController({ elements, state, services }) {
       distance2D(centerEye, mouth) / eyeDistance,
       distance2D(leftEar, rightEar) / eyeDistance,
       distance2D(nose, mouth) / eyeDistance,
-      Math.abs(Number(leftEye.y || 0) - Number(rightEye.y || 0)) / eyeDistance
+      Math.abs(Number(leftEye.y || 0) - Number(rightEye.y || 0)) / eyeDistance,
     ].map((value) => Number(value.toFixed(6)));
   }
 
   function signatureDistance(left, right) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    if (
+      !Array.isArray(left) ||
+      !Array.isArray(right) ||
+      left.length !== right.length
+    ) {
       return Number.POSITIVE_INFINITY;
     }
 
     let total = 0;
     for (let index = 0; index < left.length; index += 1) {
       const diff = Number(left[index]) - Number(right[index]);
-      total += (diff * diff);
+      total += diff * diff;
     }
     return Math.sqrt(total / left.length);
   }
@@ -114,12 +131,16 @@ export function createFaceController({ elements, state, services }) {
 
     return rawProfiles
       .map((profile) => {
-        const name = String(profile?.name || '').trim();
+        const name = String(profile?.name || "").trim();
         const signature = Array.isArray(profile?.signature)
           ? profile.signature.map((value) => Number(value))
           : [];
 
-        if (!name || signature.length !== 6 || signature.some((value) => Number.isNaN(value))) {
+        if (
+          !name ||
+          signature.length !== 6 ||
+          signature.some((value) => Number.isNaN(value))
+        ) {
           return null;
         }
 
@@ -130,9 +151,11 @@ export function createFaceController({ elements, state, services }) {
 
   function saveProfilesToStorage(profiles) {
     try {
-      window.localStorage.setItem(FACE_PROFILES_STORAGE_KEY, JSON.stringify(profiles));
-    } catch (error) {
-    }
+      window.localStorage.setItem(
+        FACE_PROFILES_STORAGE_KEY,
+        JSON.stringify(profiles),
+      );
+    } catch (error) {}
   }
 
   function loadProfilesFromStorage() {
@@ -149,7 +172,9 @@ export function createFaceController({ elements, state, services }) {
     const localProfiles = loadProfilesFromStorage();
 
     try {
-      const response = await fetch('/static/dev/face-profiles.json', { cache: 'no-store' });
+      const response = await fetch("/static/dev/face-profiles.json", {
+        cache: "no-store",
+      });
       if (!response.ok) {
         state.face.knownProfiles = localProfiles;
         return;
@@ -171,7 +196,11 @@ export function createFaceController({ elements, state, services }) {
 
   function recognizeFaceFromSignature(signature) {
     if (!signature || !state.face.knownProfiles.length) {
-      return { recognized: false, name: '', distance: Number.POSITIVE_INFINITY };
+      return {
+        recognized: false,
+        name: "",
+        distance: Number.POSITIVE_INFINITY,
+      };
     }
 
     let bestMatch = null;
@@ -183,13 +212,17 @@ export function createFaceController({ elements, state, services }) {
     }
 
     if (!bestMatch || bestMatch.distance > FACE_MATCH_THRESHOLD) {
-      return { recognized: false, name: '', distance: bestMatch ? bestMatch.distance : Number.POSITIVE_INFINITY };
+      return {
+        recognized: false,
+        name: "",
+        distance: bestMatch ? bestMatch.distance : Number.POSITIVE_INFINITY,
+      };
     }
 
     return {
       recognized: true,
       name: bestMatch.profile.name,
-      distance: bestMatch.distance
+      distance: bestMatch.distance,
     };
   }
 
@@ -197,7 +230,7 @@ export function createFaceController({ elements, state, services }) {
     if (identity.recognized) {
       return `Selamat datang kembali, ${identity.name}. Senang bertemu lagi, ada yang bisa saya bantu hari ini?`;
     }
-    return 'Selamat datang di AKEBONO. Senang bertemu Anda, silakan sampaikan kebutuhan Anda.';
+    return "Halo, ada yang bisa saya bantu hari ini?";
   }
 
   function emitSystemGreeting(message) {
@@ -229,7 +262,7 @@ export function createFaceController({ elements, state, services }) {
       if (!state.face.lostSinceAt) {
         state.face.lostSinceAt = Date.now();
       }
-      if ((Date.now() - state.face.lostSinceAt) >= GREETING_RESET_ABSENCE_MS) {
+      if (Date.now() - state.face.lostSinceAt >= GREETING_RESET_ABSENCE_MS) {
         resetGreetingPresenceState(true);
       }
       renderFacePresenceState();
@@ -238,7 +271,7 @@ export function createFaceController({ elements, state, services }) {
       return;
     }
 
-    if ((Date.now() - state.face.lastSeenAt) < FACE_LOST_GRACE_MS) {
+    if (Date.now() - state.face.lastSeenAt < FACE_LOST_GRACE_MS) {
       return;
     }
 
@@ -277,43 +310,51 @@ export function createFaceController({ elements, state, services }) {
 
   async function startFaceCamera() {
     if (!elements.faceCamera || !navigator.mediaDevices?.getUserMedia) {
-      setFaceIndicatorState('is-error', 'Kamera tidak tersedia');
+      setFaceIndicatorState("is-error", "Kamera tidak tersedia");
       return false;
     }
 
     try {
       state.face.cameraStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: 'user',
+          facingMode: "user",
           width: { ideal: 640 },
-          height: { ideal: 480 }
+          height: { ideal: 480 },
         },
-        audio: false
+        audio: false,
       });
       elements.faceCamera.srcObject = state.face.cameraStream;
       await elements.faceCamera.play();
       return true;
     } catch (error) {
-      setFaceIndicatorState('is-error', 'Izin kamera ditolak');
+      setFaceIndicatorState("is-error", "Izin kamera ditolak");
       return false;
     }
   }
 
   function runFaceDetectionLoop() {
-    state.face.detectionRafId = window.requestAnimationFrame(runFaceDetectionLoop);
+    state.face.detectionRafId =
+      window.requestAnimationFrame(runFaceDetectionLoop);
 
-    if (!state.face.detector || !elements.faceCamera || elements.faceCamera.readyState < 2) {
+    if (
+      !state.face.detector ||
+      !elements.faceCamera ||
+      elements.faceCamera.readyState < 2
+    ) {
       return;
     }
 
     const now = Date.now();
-    if ((now - state.face.lastDetectionRunAt) < FACE_DETECTION_INTERVAL_MS) {
+    if (now - state.face.lastDetectionRunAt < FACE_DETECTION_INTERVAL_MS) {
       return;
     }
     state.face.lastDetectionRunAt = now;
 
     try {
-      const result = state.face.detector.detectForVideo(elements.faceCamera, performance.now());
+      const result = state.face.detector.detectForVideo(
+        elements.faceCamera,
+        performance.now(),
+      );
       const detections = result?.detections || [];
       if (!detections.length) {
         handleFaceMissing();
@@ -322,12 +363,12 @@ export function createFaceController({ elements, state, services }) {
 
       handleFaceDetected(detections[0]);
     } catch (error) {
-      setFaceIndicatorState('is-error', 'Deteksi wajah gagal');
+      setFaceIndicatorState("is-error", "Deteksi wajah gagal");
     }
   }
 
   async function initFaceRecognition() {
-    setFaceIndicatorState('is-searching', 'Inisialisasi kamera...');
+    setFaceIndicatorState("is-searching", "Inisialisasi kamera...");
 
     const cameraReady = await startFaceCamera();
     if (!cameraReady) return;
@@ -336,33 +377,38 @@ export function createFaceController({ elements, state, services }) {
 
     try {
       const vision = await import(FACE_VISION_BUNDLE_URL);
-      const resolver = await vision.FilesetResolver.forVisionTasks(
-        FACE_WASM_BASE_URL
+      const resolver =
+        await vision.FilesetResolver.forVisionTasks(FACE_WASM_BASE_URL);
+
+      state.face.detector = await vision.FaceDetector.createFromOptions(
+        resolver,
+        {
+          baseOptions: { modelAssetPath: FACE_MODEL_URL },
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.6,
+        },
       );
 
-      state.face.detector = await vision.FaceDetector.createFromOptions(resolver, {
-        baseOptions: { modelAssetPath: FACE_MODEL_URL },
-        runningMode: 'VIDEO',
-        minDetectionConfidence: 0.6
-      });
-
-      setFaceIndicatorState('is-searching', 'Mencari wajah...');
+      setFaceIndicatorState("is-searching", "Mencari wajah...");
       runFaceDetectionLoop();
     } catch (error) {
-      setFaceIndicatorState('is-error', 'Model wajah gagal dimuat');
+      setFaceIndicatorState("is-error", "Model wajah gagal dimuat");
     }
   }
 
   function registerFaceProfile(name) {
-    const cleanedName = String(name || '').trim();
+    const cleanedName = String(name || "").trim();
     if (!cleanedName || !state.face.latestSignature) {
       return false;
     }
 
-    const nextProfiles = state.face.knownProfiles.filter((profile) => (
-      profile.name.toLowerCase() !== cleanedName.toLowerCase()
-    ));
-    nextProfiles.push({ name: cleanedName, signature: state.face.latestSignature });
+    const nextProfiles = state.face.knownProfiles.filter(
+      (profile) => profile.name.toLowerCase() !== cleanedName.toLowerCase(),
+    );
+    nextProfiles.push({
+      name: cleanedName,
+      signature: state.face.latestSignature,
+    });
     state.face.knownProfiles = nextProfiles;
     saveProfilesToStorage(state.face.knownProfiles);
     return true;
@@ -373,6 +419,6 @@ export function createFaceController({ elements, state, services }) {
     hasFreshFaceDetection,
     hasStableFacePresence,
     initFaceRecognition,
-    registerFaceProfile
+    registerFaceProfile,
   };
 }

@@ -21,10 +21,6 @@ export function createDevKioskApp() {
       || (voiceController?.isSpeechActive() || false);
   }
 
-  function isResponseInFlight() {
-    return state.assistant.isSending;
-  }
-
   function updateMicState() {
     if (elements.voiceIndicator) {
       elements.voiceIndicator.classList.toggle('is-listening', state.recognition.active);
@@ -46,7 +42,6 @@ export function createDevKioskApp() {
 
   services.app = {
     isAssistantBusy,
-    isResponseInFlight,
     updateMicState,
     syncComposerState,
     setComposerBusy

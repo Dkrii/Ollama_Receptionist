@@ -11,7 +11,6 @@ from modules.chat.constants import (
     DECISION_CANCEL_PENDING_ACTION,
     DECISION_CONFIRM_NO,
     DECISION_CONFIRM_YES,
-    DECISION_CONTINUE_PENDING_ACTION,
     DECISION_START_CONTACT_MESSAGE,
     DECISION_UNKNOWN,
 )
@@ -20,10 +19,10 @@ from modules.chat.utils.slots import (
     classify_confirmation_reply,
     extract_department_from_text,
     is_cancel_message,
-    is_continue_message,
     normalize_contact_mode,
     normalize_department,
 )
+from modules.tools.employee_directory.departments import strip_department_terms
 from modules.tools.registry import get_tool
 
 
@@ -100,6 +99,11 @@ _INFO_REQUEST_PATTERNS = (
     r"\balamat\b",
     r"\blokasi\b",
 )
+_CHANGE_CONTACT_TARGET_PATTERNS = (
+    r"\b(?:orang|yang)\s+lain\b",
+    r"\bbukan\s+(?:itu|ini|yang\s+itu|yang\s+ini)\b",
+    r"\bganti\s+(?:orang|nama|kontak|tujuan)\b",
+)
 _GENERAL_QUESTION_PATTERNS = (
     r"\?$",
     r"^(?:apa|siapa|kapan|dimana|di mana|bagaimana|berapa|apakah)\b",
@@ -127,6 +131,52 @@ _NAME_TOKEN_STOPWORDS = {
     "ibu",
     "mas",
     "mbak",
+}
+_CONTACT_TARGET_STOPWORDS = {
+    "ada",
+    "aku",
+    "anda",
+    "bagian",
+    "buat",
+    "butuh",
+    "cari",
+    "carikan",
+    "chat",
+    "contact",
+    "dari",
+    "dengan",
+    "departemen",
+    "divisi",
+    "hubungi",
+    "hubungkan",
+    "ibu",
+    "ingin",
+    "ke",
+    "kontak",
+    "mau",
+    "mencari",
+    "mohon",
+    "orang",
+    "panggil",
+    "panggilkan",
+    "pesan",
+    "pegawai",
+    "sama",
+    "sambung",
+    "sambungkan",
+    "sampaikan",
+    "saya",
+    "staff",
+    "staf",
+    "team",
+    "telepon",
+    "telpon",
+    "tim",
+    "titip",
+    "tolong",
+    "untuk",
+    "wa",
+    "whatsapp",
 }
 
 
@@ -211,6 +261,17 @@ def _find_employee_name_reference(message: str, *, allow_single_token: bool) -> 
     return ""
 
 
+def _extract_person_target_from_message(message: str, department: str) -> str:
+    without_department = strip_department_terms(message, department)
+    without_titles = _strip_person_titles(without_department)
+    tokens = [
+        token
+        for token in re.findall(r"[a-z]+", _normalize_message(without_titles))
+        if len(token) >= 2 and token not in _CONTACT_TARGET_STOPWORDS
+    ]
+    return " ".join(tokens[:4]).strip()
+
+
 def _looks_like_info_lookup(message: str) -> bool:
     return _matches_any_pattern(message, _INFO_REQUEST_PATTERNS)
 
@@ -222,6 +283,11 @@ def _looks_like_general_question(message: str) -> bool:
     if classify_confirmation_reply(normalized) != "unknown":
         return False
     return _matches_any_pattern(normalized, _GENERAL_QUESTION_PATTERNS)
+
+
+def _wants_different_contact_target(message: str) -> bool:
+    normalized = _normalize_message(message)
+    return bool(normalized and _matches_any_pattern(normalized, _CHANGE_CONTACT_TARGET_PATTERNS))
 
 
 def _has_contact_or_seeking_verb(message: str) -> bool:
@@ -325,7 +391,6 @@ def _normalize_decision_payload(payload: dict | None) -> dict[str, Any]:
     if intent not in {
         DECISION_ANSWER_KNOWLEDGE,
         DECISION_START_CONTACT_MESSAGE,
-        DECISION_CONTINUE_PENDING_ACTION,
         DECISION_CANCEL_PENDING_ACTION,
         DECISION_CONFIRM_YES,
         DECISION_CONFIRM_NO,
@@ -370,17 +435,35 @@ def _post_correct_decision(message: str, result: dict[str, Any]) -> dict[str, An
     normalized = _normalize_message(message)
     detected_dept = extract_department_from_text(normalized)
     has_contact_verb = _has_contact_or_seeking_verb(normalized)
+    has_person_reference = _PERSON_REFERENCE_PATTERN.search(normalized) is not None
     employee_name_reference = (
         _find_employee_name_reference(
             normalized,
-            allow_single_token=has_contact_verb,
+            allow_single_token=has_contact_verb or has_person_reference,
         )
-        if has_contact_verb
+        if has_contact_verb or has_person_reference
         else ""
     )
 
     if detected_dept:
         has_dept_prefix = _text_has_department_prefix(normalized)
+        person_target = ""
+        if str(result.get("target_type") or "").strip().lower() == "person":
+            person_target = str(result.get("target_value") or "").strip()
+            if normalize_department(person_target) in KNOWN_DEPARTMENTS:
+                person_target = ""
+        if not person_target:
+            person_target = employee_name_reference
+        if not person_target and has_contact_verb:
+            person_target = _extract_person_target_from_message(normalized, detected_dept)
+        if person_target and not _looks_like_info_lookup(normalized):
+            result = dict(result)
+            result["intent"] = DECISION_START_CONTACT_MESSAGE
+            result["target_type"] = "person"
+            result["target_value"] = person_target
+            result["target_department"] = detected_dept
+            result["confidence"] = max(float(result.get("confidence") or 0.0), 0.88)
+            return result
         if (has_contact_verb or has_dept_prefix) and not _looks_like_info_lookup(normalized):
             result = dict(result)
             result["intent"] = DECISION_START_CONTACT_MESSAGE
@@ -390,7 +473,7 @@ def _post_correct_decision(message: str, result: dict[str, Any]) -> dict[str, An
             result["confidence"] = max(float(result.get("confidence") or 0.0), 0.85)
             return result
 
-    if employee_name_reference and has_contact_verb and not _looks_like_info_lookup(normalized):
+    if employee_name_reference and (has_contact_verb or has_person_reference) and not _looks_like_info_lookup(normalized):
         result = dict(result)
         result["intent"] = DECISION_START_CONTACT_MESSAGE
         result["target_type"] = "person"
@@ -420,7 +503,7 @@ PENDING ACTION:
 
 Balas HANYA JSON valid:
 {{
-  "intent": "answer_knowledge|start_contact_message|continue_pending_action|cancel_pending_action|confirm_yes|confirm_no|unknown",
+  "intent": "answer_knowledge|start_contact_message|cancel_pending_action|confirm_yes|confirm_no|unknown",
   "confidence": 0.0,
   "target_type": "department|person|none",
   "target_value": "",
@@ -434,7 +517,6 @@ Balas HANYA JSON valid:
 Panduan:
 - answer_knowledge: user bertanya informasi perusahaan, profil, alamat, fasilitas, jam kerja, atau small talk.
 - start_contact_message: user ingin bertemu, dihubungkan, mencari, atau menitip pesan kepada orang/tim.
-- continue_pending_action: user memberi data untuk pending action yang sedang berjalan.
 - cancel_pending_action: user membatalkan proses kontak.
 - confirm_yes / confirm_no: jawaban konfirmasi.
 - target_value isi nama orang atau nama divisi jika jelas.
@@ -476,7 +558,6 @@ def decide_next_action(
     message: str,
     *,
     pending_action: dict[str, Any] | None = None,
-    history: list[dict] | None = None,
 ) -> dict[str, Any]:
     normalized_message = normalize_text(message)
     if not normalized_message:
@@ -485,14 +566,14 @@ def decide_next_action(
     if pending_action and is_cancel_message(normalized_message):
         return _default_decision(DECISION_CANCEL_PENDING_ACTION)
 
-    if pending_action and is_continue_message(normalized_message):
-        return _default_decision(DECISION_CONTINUE_PENDING_ACTION)
-
     confirmation = classify_confirmation_reply(normalized_message)
     if pending_action and confirmation == "confirm_yes":
         return _default_decision(DECISION_CONFIRM_YES)
     if pending_action and confirmation == "confirm_no":
         return _default_decision(DECISION_CONFIRM_NO)
+
+    if pending_action and _wants_different_contact_target(normalized_message):
+        return _default_decision(DECISION_START_CONTACT_MESSAGE)
 
     may_start_contact = _message_may_start_contact(normalized_message)
     if may_start_contact:
@@ -503,8 +584,6 @@ def decide_next_action(
 
     if pending_action and not _looks_like_general_question(normalized_message):
         decision = _llm_decision(normalized_message, pending_action=pending_action)
-        if decision["intent"] == DECISION_UNKNOWN:
-            decision["intent"] = DECISION_CONTINUE_PENDING_ACTION
         return _post_correct_decision(normalized_message, decision)
 
     return _default_decision(DECISION_ANSWER_KNOWLEDGE)

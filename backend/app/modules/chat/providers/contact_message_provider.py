@@ -15,10 +15,13 @@ from modules.chat.utils.slots import (
     normalize_pending_action,
 )
 from modules.contacts.service import dispatch_contact_message
+from modules.tools.employee_directory.departments import department_matches, strip_department_terms
 from modules.tools.registry import get_tool
 
 
 _logger = logging.getLogger(__name__)
+
+MAX_EMPLOYEE_OPTIONS = 3
 
 
 def _search_employee_directory_safe(
@@ -66,8 +69,10 @@ def _score_employee_match(employee: dict, query: str) -> float:
 
     name = normalize_text_lower(str(employee.get("nama", "")))
     department = normalize_text_lower(str(employee.get("departemen", "")))
+    division = normalize_text_lower(str(employee.get("division", "")))
+    section = normalize_text_lower(str(employee.get("section", "")))
     position = normalize_text_lower(str(employee.get("jabatan", "")))
-    searchable_blob = f"{name} {department} {position}"
+    searchable_blob = f"{name} {department} {division} {section} {position}"
 
     name_score = _similarity(normalized_query, name)
     name_tokens = name.split()
@@ -78,6 +83,8 @@ def _score_employee_match(employee: dict, query: str) -> float:
     token_overlap = sum(1 for token in query_tokens if token in employee_tokens)
     overlap_score = min(0.78, 0.48 + (token_overlap * 0.12)) if token_overlap else 0.0
     department_score = _similarity(normalized_query, department) * 0.65
+    division_score = _similarity(normalized_query, division) * 0.45
+    section_score = _similarity(normalized_query, section) * 0.45
     position_score = _similarity(normalized_query, position) * 0.55
 
     return max(
@@ -86,6 +93,8 @@ def _score_employee_match(employee: dict, query: str) -> float:
         contains_score,
         overlap_score,
         department_score,
+        division_score,
+        section_score,
         position_score,
     )
 
@@ -101,9 +110,10 @@ def _find_employee_candidates(query: str, department_hint: str = "") -> list[dic
         department_hint=canonical_hint,
         limit=20,
     )
+    ranking_query = strip_department_terms(query, canonical_hint) if canonical_hint else query
     scored: list[tuple[dict, float]] = []
     for employee in employees:
-        score = _score_employee_match(employee, query)
+        score = _score_employee_match(employee, ranking_query)
         employee_department = _normalize_department_label(str(employee.get("departemen", "")))
         if canonical_hint:
             if employee_department == canonical_hint:
@@ -136,15 +146,21 @@ def _find_employee_candidates(query: str, department_hint: str = "") -> list[dic
 
     matches = [employee for employee, _ in filtered_scored]
     if canonical_hint:
-        department_matches = [
+        department_filtered = [
             employee
             for employee in matches
-            if _normalize_department_label(str(employee.get("departemen", ""))) == canonical_hint
+            if _employee_matches_department(employee, canonical_hint)
         ]
-        if department_matches:
-            matches = department_matches
+        matches = department_filtered
 
     return matches
+
+
+def _employee_matches_department(employee: dict, canonical_department: str) -> bool:
+    return any(
+        department_matches(str(employee.get(field, "")), canonical_department)
+        for field in ("departemen", "division", "section")
+    )
 
 
 def _find_department_candidates(department: str) -> list[dict]:
@@ -157,16 +173,8 @@ def _find_department_candidates(department: str) -> list[dict]:
         department_hint=canonical_department,
         limit=20,
     )
-    exact_matches = [
-        employee
-        for employee in employees
-        if _normalize_department_label(str(employee.get("departemen", "")))
-        == canonical_department
-    ]
-    matches = exact_matches or employees
-
-    matches.sort(key=lambda item: str(item.get("nama", "")).lower())
-    return matches
+    employees.sort(key=lambda item: str(item.get("nama", "")).lower())
+    return employees
 
 
 def _find_employee_by_id(employee_id: int | None) -> dict | None:
@@ -184,7 +192,7 @@ def _format_employee_option_label(employee: dict) -> str:
     department = _normalize_message_value(employee.get("departemen"), fallback="")
     position = _normalize_message_value(employee.get("jabatan"), fallback="")
     details = ", ".join(value for value in (position, department) if value)
-    return f"{name} - {details}" if details else name
+    return f"{name}, {details}" if details else name
 
 
 def _candidate_payload(employee: dict) -> dict[str, Any]:
@@ -214,10 +222,6 @@ def _resolve_candidate_selection(message: str, candidates: list[dict]) -> dict |
         "kedua": 1,
         "tiga": 2,
         "ketiga": 2,
-        "empat": 3,
-        "keempat": 3,
-        "lima": 4,
-        "kelima": 4,
     }
     for word, index in number_words.items():
         if re.search(rf"\b(?:nomor|pilih|yang)?\s*{word}\b", stripped) and 0 <= index < len(candidates):
@@ -238,6 +242,15 @@ def _resolve_candidate_selection(message: str, candidates: list[dict]) -> dict |
             return employee
 
     return None
+
+
+def has_contact_candidate_selection(message: str, pending_action: dict[str, Any] | None) -> bool:
+    pending = normalize_pending_action(pending_action)
+    if not pending:
+        return False
+
+    candidates = pending.get("candidates") if isinstance(pending.get("candidates"), list) else []
+    return bool(candidates and _resolve_candidate_selection(message, candidates))
 
 
 def _normalize_message_value(value: Any, fallback: str = "-") -> str:
@@ -275,6 +288,7 @@ def _build_pending_action(
     visitor_name: str = "",
     visitor_goal: str = "",
 ) -> dict[str, Any]:
+    visible_candidates = list(candidates or [])[:MAX_EMPLOYEE_OPTIONS]
     return {
         "type": PENDING_ACTION_CONTACT_MESSAGE,
         "target_employee_id": int(selected["id"]) if isinstance(selected, dict) and selected.get("id") else None,
@@ -284,25 +298,35 @@ def _build_pending_action(
         "visitor_goal": visitor_goal.strip(),
         "target_kind": target_kind,
         "target_department": target_department,
-        "candidates": [_candidate_payload(candidate) for candidate in candidates or []],
+        "candidates": [_candidate_payload(candidate) for candidate in visible_candidates],
     }
 
 
 def _build_disambiguation_prompt(candidates: list[dict], prefix: str) -> str:
     candidate_labels = [
         f"{index}. {_format_employee_option_label(item)}"
-        for index, item in enumerate(candidates, start=1)
+        for index, item in enumerate(candidates[:MAX_EMPLOYEE_OPTIONS], start=1)
         if isinstance(item, dict) and item.get("nama")
     ]
     if not candidate_labels:
-        return prefix + " Sebutkan nama lengkap atau divisi yang Anda maksud."
+        return "Saya belum menemukan nama itu. Bisa sebutkan nama lengkap atau divisinya?"
 
     options = "\n".join(candidate_labels)
     return (
-        f"{prefix}\n\n"
+        f"{prefix.strip()}\n\n"
         f"{options}\n\n"
-        "Silakan pilih nomor, atau sebutkan namanya."
+        "Silakan pilih nomornya, atau sebutkan nama lengkapnya."
     )
+
+
+def _build_not_found_answer(target_label: str, target_department: str) -> str:
+    label = _normalize_message_value(target_label, fallback="").strip()
+    department = _normalize_message_value(target_department, fallback="").strip()
+    if label and department and normalize_text_lower(label) != normalize_text_lower(f"tim {department}"):
+        return f"Saya belum menemukan {label} di tim {department}. Bisa sebutkan nama lengkapnya?"
+    if department:
+        return f"Saya belum menemukan kontak untuk tim {department}. Bisa sebutkan nama orangnya?"
+    return "Saya belum menemukan nama itu. Bisa sebutkan nama lengkap atau divisinya?"
 
 
 def _default_contact_delivery_detail(status: str) -> str:
@@ -408,26 +432,40 @@ def _resolve_target_from_decision(message: str, decision: dict[str, Any]) -> tup
     return _find_employee_candidates(search_query, department_hint=department_hint), search_query, "person", department_hint
 
 
+def _has_contact_search_target(message: str, decision: dict[str, Any]) -> bool:
+    target_type = str(decision.get("target_type") or "none").strip().lower()
+    target_value = str(decision.get("target_value") or "").strip()
+    search_phrase = str(decision.get("search_phrase") or "").strip()
+    target_department = str(decision.get("target_department") or "").strip()
+    return bool(
+        target_value
+        or search_phrase
+        or target_department
+        or target_type == "department"
+        or extract_department_from_text(message)
+    )
+
+
 def _next_prompt_for_pending(pending_action: dict[str, Any], employee: dict | None) -> tuple[str, dict[str, Any] | None]:
     if not employee:
         candidates = pending_action.get("candidates") if isinstance(pending_action, dict) else []
         if isinstance(candidates, list) and candidates:
-            answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mungkin Anda maksud.")
+            answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mirip. Yang mana yang Anda maksud?")
             return answer, pending_action
-        return "Saya belum menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya.", None
+        return "Saya belum menemukan nama itu. Bisa sebutkan nama lengkap atau divisinya?", None
 
     if not pending_action.get("confirmed"):
-        answer = f"Apakah Anda ingin saya sampaikan pesan untuk {_format_employee_contact_target(employee)}?"
+        answer = f"Saya bantu sampaikan pesan untuk {_format_employee_contact_target(employee)}, ya?"
         return answer, pending_action
 
     visitor_name = str(pending_action.get("visitor_name") or "").strip()
     if not visitor_name:
-        answer = f"Baik, saya bantu sampaikan pesan untuk {employee['nama']}. Mohon sebutkan nama Anda terlebih dahulu."
+        answer = "Boleh saya tahu nama Anda?"
         return answer, pending_action
 
     visitor_goal = str(pending_action.get("visitor_goal") or "").strip()
     if not visitor_goal:
-        answer = f"Terima kasih, {visitor_name}. Sekarang mohon sampaikan tujuan atau keperluan Anda."
+        answer = "Keperluannya apa yang ingin saya sampaikan?"
         return answer, pending_action
 
     answer = _dispatch_contact_message(employee, visitor_name, visitor_goal)
@@ -441,16 +479,6 @@ def cancel_contact_message(pending_action: dict[str, Any] | None) -> str:
     return "Baik, saya batalkan permintaan kontaknya."
 
 
-def continue_contact_message(pending_action: dict[str, Any] | None) -> tuple[str, dict[str, Any] | None]:
-    pending = normalize_pending_action(pending_action)
-    if not pending:
-        return "Belum ada proses kontak yang sedang berjalan.", None
-
-    employee = _find_employee_by_id(pending.get("target_employee_id"))
-    answer, next_pending = _next_prompt_for_pending(pending, employee)
-    return answer, next_pending
-
-
 def handle_contact_message_turn(
     message: str,
     *,
@@ -460,17 +488,20 @@ def handle_contact_message_turn(
     pending = normalize_pending_action(pending_action)
 
     if not pending:
+        if not _has_contact_search_target(message, decision):
+            return "Baik, siapa yang ingin Anda hubungi?", None
+
         candidates, target_label, target_kind, target_department = _resolve_target_from_decision(message, decision)
         if not candidates:
-            return "Saya tidak menemukan karyawan tersebut. Silakan sebutkan nama lengkap atau divisinya.", None
+            return _build_not_found_answer(target_label, target_department), None
 
         if len(candidates) > 1:
-            answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mungkin Anda maksud.")
+            answer = _build_disambiguation_prompt(candidates, "Saya menemukan beberapa nama yang mirip. Yang mana yang Anda maksud?")
             return answer, _build_pending_action(
                 target_label=target_label,
                 target_kind=target_kind,
                 target_department=target_department,
-                candidates=candidates[:5],
+                candidates=candidates,
             )
 
         selected = candidates[0]
@@ -489,9 +520,11 @@ def handle_contact_message_turn(
 
     candidates = pending.get("candidates") if isinstance(pending.get("candidates"), list) else []
     employee = _find_employee_by_id(pending.get("target_employee_id"))
+    selected_from_candidates = False
     if not employee and candidates:
         selected = _resolve_candidate_selection(message, candidates)
         if selected:
+            selected_from_candidates = True
             employee = _find_employee_by_id(selected.get("id")) or selected
             pending = _build_pending_action(
                 selected=employee,
@@ -516,12 +549,12 @@ def handle_contact_message_turn(
                     visitor_goal=str(pending.get("visitor_goal") or ""),
                 )
             else:
-                answer = _build_disambiguation_prompt(candidates_from_decision, "Saya menemukan beberapa nama yang mungkin Anda maksud.")
+                answer = _build_disambiguation_prompt(candidates_from_decision, "Saya menemukan beberapa nama yang mirip. Yang mana yang Anda maksud?")
                 return answer, _build_pending_action(
                     target_label=target_label,
                     target_kind=target_kind,
                     target_department=target_department,
-                    candidates=candidates_from_decision[:5],
+                    candidates=candidates_from_decision,
                     visitor_name=str(pending.get("visitor_name") or ""),
                     visitor_goal=str(pending.get("visitor_goal") or ""),
                 )
@@ -535,7 +568,7 @@ def handle_contact_message_turn(
     elif decision.get("intent") == "confirm_no":
         return cancel_contact_message(pending), None
 
-    if not pending.get("visitor_name"):
+    if not pending.get("visitor_name") and not selected_from_candidates:
         visitor_name = str(decision.get("visitor_name") or "").strip()
         if not visitor_name:
             visitor_name = extract_visitor_name(message, selected_name=str(employee.get("nama") or ""))

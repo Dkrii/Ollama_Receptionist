@@ -5,12 +5,12 @@ from modules.chat.constants import (
     DECISION_CANCEL_PENDING_ACTION,
     DECISION_CONFIRM_NO,
     DECISION_CONFIRM_YES,
-    DECISION_CONTINUE_PENDING_ACTION,
     DECISION_START_CONTACT_MESSAGE,
+    DECISION_UNKNOWN,
 )
 from modules.chat.providers.contact_message_provider import (
     cancel_contact_message,
-    continue_contact_message,
+    has_contact_candidate_selection,
     handle_contact_message_turn,
 )
 from modules.chat.providers.decision_provider import decide_next_action
@@ -19,6 +19,23 @@ from modules.chat.utils.memory import resolve_chat_memory
 from modules.chat.utils.slots import build_flow_state, normalize_pending_action
 from modules.chat.utils.streaming import static_chat_events
 from modules.chat.utils.transcript import store_chat_message
+
+
+def _needs_contact_details(pending_action: dict[str, Any] | None) -> bool:
+    if not pending_action:
+        return False
+    return bool(
+        pending_action.get("target_employee_id")
+        and pending_action.get("confirmed")
+        and (not pending_action.get("visitor_name") or not pending_action.get("visitor_goal"))
+    )
+
+
+def _has_contact_detail_payload(decision: dict[str, Any]) -> bool:
+    return bool(
+        str(decision.get("visitor_name") or "").strip()
+        or str(decision.get("visitor_goal") or "").strip()
+    )
 
 
 class ChatAppService:
@@ -38,7 +55,6 @@ class ChatAppService:
         decision = decide_next_action(
             user_message,
             pending_action=pending_action,
-            history=prior_history,
         )
         intent = str(decision.get("intent") or DECISION_ANSWER_KNOWLEDGE).strip().lower()
 
@@ -53,24 +69,19 @@ class ChatAppService:
                 route="contact_message",
             )
 
-        if pending_action and intent == DECISION_CONTINUE_PENDING_ACTION:
-            answer, next_pending = continue_contact_message(pending_action)
-            store_chat_message(resolved_conversation_id, "user", user_message)
-            store_chat_message(resolved_conversation_id, "assistant", answer)
-            return static_chat_events(
-                answer=answer,
-                conversation_id=resolved_conversation_id,
-                flow_state=build_flow_state(next_pending),
-                route="contact_message",
+        needs_contact_details = _needs_contact_details(pending_action)
+        should_continue_contact = bool(
+            pending_action
+            and (
+                intent in {DECISION_CONFIRM_YES, DECISION_CONFIRM_NO}
+                or has_contact_candidate_selection(user_message, pending_action)
+                or (intent == DECISION_UNKNOWN and needs_contact_details)
+                or (needs_contact_details and _has_contact_detail_payload(decision))
             )
-
-        should_handle_contact = (
-            intent == DECISION_START_CONTACT_MESSAGE
-            or (pending_action is not None and intent in {DECISION_CONFIRM_YES, DECISION_CONFIRM_NO})
-            or (pending_action is not None and intent not in {DECISION_ANSWER_KNOWLEDGE})
         )
+        should_handle_contact = intent == DECISION_START_CONTACT_MESSAGE or should_continue_contact
         if should_handle_contact:
-            contact_pending = None if intent == DECISION_START_CONTACT_MESSAGE else pending_action
+            contact_pending = pending_action if should_continue_contact else None
             answer, next_pending = handle_contact_message_turn(
                 user_message,
                 pending_action=contact_pending,
@@ -89,5 +100,5 @@ class ChatAppService:
             user_message,
             conversation_id=resolved_conversation_id,
             history=prior_history,
-            flow_state=build_flow_state(pending_action),
+            flow_state=build_flow_state(None),
         )

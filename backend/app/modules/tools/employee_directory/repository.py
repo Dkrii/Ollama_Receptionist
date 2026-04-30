@@ -3,9 +3,15 @@ from __future__ import annotations
 import logging
 import re
 import time
+from difflib import SequenceMatcher
 from typing import Any
 
 from infrastructure import database
+from modules.tools.employee_directory.departments import (
+    department_matches,
+    normalize_department,
+    strip_department_terms,
+)
 from modules.tools.employee_directory.schemas import EmployeeRecord
 
 
@@ -135,7 +141,9 @@ def _select_query() -> str:
 SELECT
   {columns["id"]} AS id,
   {columns["name"]} AS nama,
+  {columns["division"]} AS division,
   {columns["department"]} AS departemen,
+  {columns["section"]} AS section,
   {columns["position"]} AS jabatan,
   {columns["phone"]} AS nomor_wa
 FROM {columns["table"]}
@@ -153,7 +161,9 @@ def _find_by_id_query() -> str:
 SELECT TOP 1
   {columns["id"]} AS id,
   {columns["name"]} AS nama,
+  {columns["division"]} AS division,
   {columns["department"]} AS departemen,
+  {columns["section"]} AS section,
   {columns["position"]} AS jabatan,
   {columns["phone"]} AS nomor_wa
 FROM {columns["table"]}
@@ -204,7 +214,6 @@ def _search_condition(
 def _search_query(
     *,
     query_terms: list[str],
-    department_terms: list[str],
     limit: int,
 ) -> tuple[str, tuple[str, ...]]:
     columns = _employee_columns()
@@ -222,15 +231,6 @@ def _search_query(
         filters.append(query_filter)
         params.extend(query_params)
 
-    department_filter, department_params = _search_condition(
-        columns,
-        department_terms,
-        ["department", "division", "section"],
-    )
-    if department_filter:
-        filters.append(department_filter)
-        params.extend(department_params)
-
     if filters:
         where_clause += "\n  AND " + "\n  AND ".join(filters)
 
@@ -239,7 +239,9 @@ def _search_query(
 SELECT TOP {_safe_limit(limit)}
   {columns["id"]} AS id,
   {columns["name"]} AS nama,
+  {columns["division"]} AS division,
   {columns["department"]} AS departemen,
+  {columns["section"]} AS section,
   {columns["position"]} AS jabatan,
   {columns["phone"]} AS nomor_wa
 FROM {columns["table"]}
@@ -252,6 +254,107 @@ ORDER BY {columns["name"]}
 
 def _normalize_text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _normalize_search_text(value: Any) -> str:
+    return _normalize_text(value).lower()
+
+
+def _searchable_employee_text(employee: EmployeeRecord) -> str:
+    return " ".join(
+        _normalize_search_text(employee.get(field, ""))
+        for field in ("nama", "departemen", "division", "section", "jabatan")
+    )
+
+
+def _filter_query_terms_for_department(
+    query_terms: list[str],
+    canonical_department: str,
+) -> list[str]:
+    if not canonical_department:
+        return query_terms
+    cleaned_query = strip_department_terms(" ".join(query_terms), canonical_department)
+    return _search_terms(cleaned_query)
+
+
+def _employee_matches_any_term(employee: EmployeeRecord, terms: list[str]) -> bool:
+    if not terms:
+        return True
+    searchable_text = _searchable_employee_text(employee)
+    searchable_tokens = set(re.findall(r"[a-z0-9]+", searchable_text))
+    return any(term in searchable_tokens or term in searchable_text for term in terms)
+
+
+def _employee_matches_department(
+    employee: EmployeeRecord,
+    canonical_department: str,
+) -> bool:
+    return any(
+        department_matches(str(employee.get(field, "")), canonical_department)
+        for field in ("departemen", "division", "section")
+    )
+
+
+def _similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _score_field_match(query: str, field_value: str) -> float:
+    normalized_field = _normalize_search_text(field_value)
+    if not query or not normalized_field:
+        return 0.0
+
+    field_tokens = re.findall(r"[a-z0-9]+", normalized_field)
+    query_tokens = re.findall(r"[a-z0-9]+", query)
+    if not query_tokens:
+        return 0.0
+
+    phrase_score = 0.9 if query in normalized_field else 0.0
+    exact_token_score = 0.82 if any(token in field_tokens for token in query_tokens) else 0.0
+    token_similarity = max(
+        [_similarity(query, token) for token in field_tokens] or [0.0]
+    )
+    field_similarity = _similarity(query, normalized_field)
+    return max(phrase_score, exact_token_score, token_similarity, field_similarity)
+
+
+def _score_employee(employee: EmployeeRecord, query_terms: list[str]) -> float:
+    query = " ".join(query_terms).strip()
+    if not query:
+        return 1.0
+
+    name_score = _score_field_match(query, str(employee.get("nama", "")))
+    position_score = _score_field_match(query, str(employee.get("jabatan", ""))) * 0.45
+    section_score = _score_field_match(query, str(employee.get("section", ""))) * 0.35
+    division_score = _score_field_match(query, str(employee.get("division", ""))) * 0.25
+    return max(name_score, position_score, section_score, division_score)
+
+
+def _search_cached_employees(
+    *,
+    query_terms: list[str],
+    canonical_department: str,
+    limit: int,
+) -> list[EmployeeRecord]:
+    filtered_terms = _filter_query_terms_for_department(
+        query_terms,
+        canonical_department,
+    )
+    employees = [
+        employee
+        for employee in list_employees()
+        if _employee_matches_department(employee, canonical_department)
+        and _employee_matches_any_term(employee, filtered_terms)
+    ]
+    employees.sort(
+        key=lambda employee: (
+            -_score_employee(employee, filtered_terms),
+            _normalize_search_text(employee.get("nama", "")),
+        )
+    )
+    return _copy_rows(employees[:_safe_limit(limit)])
 
 
 def _normalize_phone(value: Any) -> str:
@@ -268,7 +371,9 @@ def _normalize_employee_row(row: dict[str, Any]) -> EmployeeRecord | None:
         return None
 
     name = _normalize_text(row.get("nama"))
+    division = _normalize_text(row.get("division"))
     department = _normalize_text(row.get("departemen"))
+    section = _normalize_text(row.get("section"))
     position = _normalize_text(row.get("jabatan"))
     phone = _normalize_phone(row.get("nomor_wa"))
 
@@ -279,6 +384,8 @@ def _normalize_employee_row(row: dict[str, Any]) -> EmployeeRecord | None:
         "id": employee_id,
         "nama": name,
         "departemen": department,
+        "division": division,
+        "section": section,
         "jabatan": position,
         "nomor_wa": phone,
         "source": "database",
@@ -361,13 +468,19 @@ def search_employees(
     limit: int | None = SEARCH_LIMIT,
 ) -> list[EmployeeRecord]:
     query_terms = _search_terms(query)
-    department_terms = _search_terms(department_hint)
-    if not query_terms and not department_terms:
+    canonical_department = normalize_department(department_hint)
+    if canonical_department:
+        return _search_cached_employees(
+            query_terms=query_terms,
+            canonical_department=canonical_department,
+            limit=_safe_limit(limit),
+        )
+
+    if not query_terms:
         return []
 
     sql, params = _search_query(
         query_terms=query_terms,
-        department_terms=department_terms,
         limit=_safe_limit(limit),
     )
 
