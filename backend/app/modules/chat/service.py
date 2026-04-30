@@ -6,7 +6,6 @@ from modules.chat.constants import (
     DECISION_CONFIRM_NO,
     DECISION_CONFIRM_YES,
     DECISION_START_CONTACT_MESSAGE,
-    DECISION_UNKNOWN,
 )
 from modules.chat.providers.contact_message_provider import (
     cancel_contact_message,
@@ -30,13 +29,6 @@ def _needs_contact_details(pending_action: dict[str, Any] | None) -> bool:
         pending_action.get("target_employee_id")
         and pending_action.get("confirmed")
         and (not pending_action.get("visitor_name") or not pending_action.get("visitor_goal"))
-    )
-
-
-def _has_contact_detail_payload(decision: dict[str, Any]) -> bool:
-    return bool(
-        str(decision.get("visitor_name") or "").strip()
-        or str(decision.get("visitor_goal") or "").strip()
     )
 
 
@@ -88,8 +80,7 @@ class ChatAppService:
             and (
                 intent in {DECISION_CONFIRM_YES, DECISION_CONFIRM_NO}
                 or has_contact_candidate_selection(user_message, pending_action)
-                or (intent == DECISION_UNKNOWN and needs_contact_details)
-                or (needs_contact_details and _has_contact_detail_payload(decision))
+                or needs_contact_details
             )
         )
         should_handle_contact = intent == DECISION_START_CONTACT_MESSAGE or should_continue_contact

@@ -589,15 +589,11 @@ def handle_contact_message_turn(
             )
 
         selected = candidates[0]
-        visitor_name = str(decision.get("visitor_name") or "").strip()
-        visitor_goal = str(decision.get("visitor_goal") or "").strip()
         pending = _build_pending_action(
             selected=selected,
             target_kind=target_kind,
             target_department=target_department,
             confirmed=False,
-            visitor_name=visitor_name,
-            visitor_goal=visitor_goal,
         )
         answer, next_pending = _next_prompt_for_pending(pending, selected)
         return answer, next_pending
