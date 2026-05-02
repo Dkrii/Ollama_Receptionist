@@ -49,6 +49,10 @@ class Settings(BaseModel):
     rag_chunk_overlap: int = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
     rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "1800"))
 
+    log_dir: Path = Path(os.getenv("LOG_DIR", "/workspace/runtime/logs"))
+    log_level: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    log_file_retention_days: int = int(os.getenv("LOG_FILE_RETENTION_DAYS", "30"))
+
     knowledge_dir: Path = Path(os.getenv("KNOWLEDGE_DIR", "/workspace/knowledge"))
     frontend_src_dir: Path = _frontend_src_dir()
     chat_db_path: Path = Path(os.getenv("CHAT_DB_PATH", "/workspace/runtime/chat.sqlite3"))

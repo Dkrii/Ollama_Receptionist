@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
+from logging_config import setup_logging
 from middleware import RequestLoggerMiddleware
 from modules.admin.repository import AdminRepository
 from modules.admin.routes import router as admin_router
@@ -13,10 +14,7 @@ from modules.chat.repository import ChatRepository
 from modules.web.routes import router as web_router
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-)
+setup_logging(settings.log_dir, level=settings.log_level, retention_days=settings.log_file_retention_days)
 
 _logger = logging.getLogger(__name__)
 
