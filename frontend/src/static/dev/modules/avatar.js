@@ -11,18 +11,11 @@ export function createAvatarController({ elements, state, services }) {
   }
 
   function updateAvatarState() {
-    const isSpeaking = services.voice?.isSpeechActive() || false;
     const isReadyForListening = (services.face?.hasStableFacePresence() || false)
       && !(services.app?.isAssistantBusy() || false);
     const isListening = state.recognition.active || state.vad.speechActive || isReadyForListening;
 
-    if (isSpeaking) {
-      setAvatarState('TALKING');
-    } else if (state.assistant.isAssistantResponding) {
-      setAvatarState('THINGKING');
-    } else if (state.assistant.isSending) {
-      setAvatarState('THINGKING');
-    } else if (isListening) {
+    if (isListening) {
       setAvatarState('LISTENING');
     } else {
       setAvatarState('IDLE');

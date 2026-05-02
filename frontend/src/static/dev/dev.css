@@ -276,9 +276,7 @@ input {
 }
 
 .kiosk-avatar[data-state="IDLE"] .avatar-img[data-state-id="IDLE"],
-.kiosk-avatar[data-state="LISTENING"] .avatar-img[data-state-id="LISTENING"],
-.kiosk-avatar[data-state="THINGKING"] .avatar-img[data-state-id="THINGKING"],
-.kiosk-avatar[data-state="TALKING"] .avatar-img[data-state-id="TALKING"] {
+.kiosk-avatar[data-state="LISTENING"] .avatar-img[data-state-id="LISTENING"] {
   display: block;
 }
 
