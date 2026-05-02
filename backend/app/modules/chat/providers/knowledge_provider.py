@@ -39,8 +39,9 @@ def _build_grounding_note(retrieval: dict[str, Any]) -> str:
             "Pastikan setiap detail spesifik yang disebut memang tertulis eksplisit."
         )
     return (
-        "Konteks hanya berkaitan sebagian atau lemah. "
-        "Jangan memberikan lokasi, nomor, nama, jadwal, atau detail spesifik kecuali benar-benar tertulis jelas."
+        "Konteks mungkin hanya relevan sebagian. "
+        "Gunakan informasi yang ada di konteks jika membantu, sampaikan secara natural. "
+        "Untuk detail spesifik (nomor, alamat, jadwal) yang tidak tertulis eksplisit di konteks, akui dengan jujur bahwa informasinya belum tersedia."
     )
 
 

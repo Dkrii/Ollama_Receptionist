@@ -18,6 +18,35 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
 )
 
+_logger = logging.getLogger(__name__)
+
+
+def _warmup() -> None:
+    from infrastructure.ai_client import _active_provider, embed_text, generate_text
+    from infrastructure.chroma import get_collection
+
+    try:
+        get_collection()
+        _logger.info("startup.warmup chroma=ok")
+    except Exception:
+        _logger.exception("startup.warmup chroma=failed")
+
+    if _active_provider() != "ollama":
+        return
+
+    try:
+        embed_text("warmup", timeout=60)
+        _logger.info("startup.warmup embed=ok")
+    except Exception:
+        _logger.exception("startup.warmup embed=failed")
+
+    try:
+        generate_text(prompt="ok", system="", stream=False, max_tokens=1, timeout=60)
+        _logger.info("startup.warmup llm=ok")
+    except Exception:
+        _logger.exception("startup.warmup llm=failed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ChatRepository.initialize()
@@ -26,6 +55,7 @@ async def lifespan(_: FastAPI):
         ChatRepository.cleanup_expired_transcripts()
     except Exception:
         logging.exception("chat.sqlite.cleanup skipped")
+    _warmup()
     yield
 
 

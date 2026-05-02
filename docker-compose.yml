@@ -1,7 +1,7 @@
 services:
   chroma:
     image: chromadb/chroma:0.5.23
-    container_name: kiosk-chroma
+    container_name: vr-chroma
     restart: unless-stopped
     volumes:
       - vector_data:/chroma/chroma
@@ -12,13 +12,48 @@ services:
       retries: 8
       start_period: 15s
     networks:
-      - kiosk-net
+      - vr-net
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    container_name: vr-mssql
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DB_MSSQL_PASSWORD}"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    networks:
+      - vr-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/opt/mssql-tools18/bin/sqlcmd",
+          "-S",
+          "localhost",
+          "-U",
+          "${DB_MSSQL_USER}",
+          "-P",
+          "${DB_MSSQL_PASSWORD}",
+          "-C",
+          "-Q",
+          "SELECT 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   app:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: kiosk-app
+    container_name: vr-app
     restart: unless-stopped
     env_file:
       - .env
@@ -26,11 +61,12 @@ services:
     environment:
       KNOWLEDGE_DIR: /workspace/knowledge
       FRONTEND_SRC_DIR: /frontend/src
-      # OLLAMA_BASE_URL: "http://host.docker.internal:11434"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       chroma:
+        condition: service_healthy
+      mssql:
         condition: service_healthy
     volumes:
       - ./backend/app:/app
@@ -46,12 +82,13 @@ services:
       retries: 10
       start_period: 20s
     networks:
-      - kiosk-net
+      - vr-net
 
 volumes:
   vector_data:
+  mssql_data:
 
 networks:
-  kiosk-net:
-    name: kiosk-net
+  vr-net:
+    name: vr-net
     driver: bridge
